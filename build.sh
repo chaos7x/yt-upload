@@ -7,6 +7,31 @@ set -e
 VERSION="${1:-dev}"
 TARGET="${2:-local}"
 
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+# Wenn es sich nicht um ein Dev-Tag handelt, Prüfungen für Release durchführen
+if [ "$VERSION" != "dev" ]; then
+  echo "🔍 Prüfe Release-Voraussetzungen für Version '$VERSION'..."
+
+  # 1. Check: Befinden wir uns auf main?
+  if [ "$CURRENT_BRANCH" != "main" ]; then
+    echo "❌ FEHLER: Releases dürfen nur auf dem 'main'-Branch gebaut werden!"
+    echo "Aktueller Branch: '$CURRENT_BRANCH'"
+    exit 1
+  fi
+
+  # 2. Check: Gibt es uncommitted Änderungen?
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "⚠️ WARNUNG: Du hast uncommitted Änderungen auf deinem Branch."
+    read -p "Möchtest du trotzdem fortfahren? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      echo "Abgebrochen."
+      exit 1
+    fi
+  fi
+fi
+
 BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 LOCAL_PREFIX="yt-upload"
 REGISTRY_PREFIX="ghcr.io/chaos7x/${LOCAL_PREFIX}"
@@ -18,10 +43,7 @@ else
   IMAGE_NAME="$LOCAL_PREFIX"
 fi
 
-# echo "Kompiliere yt-upload.py (Version: $VERSION)..."
-# python3 -c "import py_compile; py_compile.compile('yt-upload.pyc', cfile='yt-upload.py', doraise=True)"
-
-echo "Baue Docker-Image (Version: $VERSION, Ziel: $TARGET)..."
+echo "Baue Docker-Image (Version: $VERSION, Ziel: $TARGET, Branch: $CURRENT_BRANCH)..."
 
 # Tag-Liste initialisieren
 TAGS=(-t "$IMAGE_NAME:$VERSION")
@@ -32,7 +54,7 @@ if [ "$VERSION" != "dev" ]; then
 fi
 
 # Docker Build ausführen
-docker build -f Dockerfile.python \
+docker build -f Dockerfile \
   --build-arg VERSION="$VERSION" \
   --build-arg BUILD_DATE="$BUILD_DATE" \
   --pull \
@@ -45,9 +67,20 @@ if [ "$TARGET" = "registry" ]; then
 
   if [ "$VERSION" != "dev" ]; then
     docker push "$IMAGE_NAME:latest"
+
+    # Optionalen Git-Tag erzeugen (nur bei Registry-Releases auf main)
+    read -p "Möchtest du auch den Git-Tag 'v${VERSION}' erstellen und pushen? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+      if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+        echo "⚠️ Git-Tag 'v${VERSION}' existiert bereits lokal."
+      else
+        git tag -a "v${VERSION}" -m "Release v${VERSION}"
+        git push origin "v${VERSION}"
+        echo "✅ Git-Tag 'v${VERSION}' erfolgreich gepusht!"
+      fi
+    fi
   fi
 fi
 
-# Lokales temporäres Artefakt aufräumen
-# rm yt-upload
-echo "Fertig!"
+echo "🎉 Fertig!"
