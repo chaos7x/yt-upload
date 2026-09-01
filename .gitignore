@@ -1,0 +1,15 @@
+# Logs, temporäre Daten und Medien ausschließen
+log/
+videos/
+oauth/
+tests/
+app/
+
+# Backup- und Sicherungsdateien ausschließen
+*.sav
+*.bak
+*.new
+
+# Python Bytecode und Cache ausschließen
+__pycache__/
+*.pyc

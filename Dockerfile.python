@@ -1,0 +1,62 @@
+FROM mwader/static-ffmpeg:latest AS ffmpeg-binaries
+FROM debian:trixie-slim
+
+ARG VERSION
+ARG BUILD_DATE
+
+LABEL version="${VERSION}"
+LABEL build_date="${BUILD_DATE}"
+LABEL maintainer="Chaos7x"
+LABEL purpose="YouTube upload automation with ffmpeg + python"
+
+# ==========================================
+# STUFE 1: Statische Binaries kopieren (Dauert 0 Sekunden)
+# ==========================================
+COPY --from=ffmpeg-binaries /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
+
+RUN apt-get update && apt-get install -y  --no-install-recommends \
+    mc \
+    git \
+    python3-inotify \
+    libimage-exiftool-perl \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==========================================
+# STUFE 3: Python-Tools & youtube-upload direkt installieren
+# ==========================================
+RUN pip install --no-cache-dir --break-system-packages \
+    google-auth-oauthlib \
+    requests-oauthlib \
+    git+https://github.com/tokland/youtube-upload.git
+
+# ==========================================
+# STUFE 4: Arbeitsverzeichnis & Rechte
+# ==========================================
+WORKDIR /app
+# RUN mkdir .cache .config .local && chmod 777 .cache .config .local
+
+# Neues, separates Datenverzeichnis für deine Videos erstellen und freigeben
+RUN mkdir /videos && chmod 777 /videos
+
+# Log Verzeichnis erstellen und freigeben
+RUN mkdir /log && chmod 777 /log
+
+# ==========================================
+# STUFE 5: Deine lokalen Skripte & Configs
+# ==========================================
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# Hier wird nun dein Python-Skript als 'yt-upload' kopiert
+COPY yt-upload.py /usr/local/bin/yt-upload
+COPY get_token.py /usr/local/bin/get_token
+
+RUN chmod +x /usr/local/bin/yt-upload /usr/local/bin/entrypoint.sh /usr/local/bin/get_token
+
+# .bashrc kopieren und Symlink nach /tmp legen
+COPY bashrc /etc/global.bashrc
+RUN ln -s /etc/global.bashrc /tmp/.bashrc
+RUN ln -s /etc/global.bashrc /app/.bashrc
+ENV HOME=/app
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

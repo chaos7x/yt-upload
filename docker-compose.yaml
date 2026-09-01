@@ -1,0 +1,74 @@
+services:
+  yt-uploader:
+    image: yt-upload:1.0.0
+#    image: yt-upload:beta
+    container_name: yt-upload
+    hostname: yt-upload
+    restart: unless-stopped
+
+    security_opt:
+      - no-new-privileges:true
+
+    # 1. Das User-Mapping erzwingen (optional, aber Best Practice für Docker)
+    user: "11107:11108"
+
+    environment:
+      - TZ=Europe/Berlin
+      - ENABLE_DYNAMIC_PLAYLISTS=true
+      - HOME=/tmp  # Hält Schreibzugriffe für Caches/Config aus dem :ro gemounteten /app fern
+
+    volumes:
+      # 1. Den App-Ordner (inklusive deiner lokalen upload.sh) einbinden
+      # - app:/app:ro
+
+      # 2. OAuth-Konfiguration für tokland/youtube-upload
+      # Da tokland standardmäßig in ~/.config/youtube-upload sucht und wir HOME=/app gesetzt haben,
+      # sucht das Tool die Client-Secrets nun unter /app/oauth
+      - oauth:/app/oauth
+
+      # 3. Video-Verzeichnis (Pflicht für ffmpeg und inotify)
+      - videos:/videos
+
+      # 4. Log Verzeichnis
+      - log:/log
+
+    # Podman + Docker kompatibel
+    tty: true
+    stdin_open: true
+
+    # 4. keep-id entfernen oder auskommentieren!
+    # Da wir nun mit einem echten Docker-Daemon arbeiten und den Container direkt
+    # auf deine UID mappen, wird "keep-id" (das ein reines Podman-Feature ist) nicht mehr benötigt.
+    # userns_mode: "keep-id"
+    networks:
+      - default
+
+volumes:
+  app:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "./app"
+
+  oauth:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "./oauth"
+
+  videos:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "./videos"
+
+  log:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "./log"
+
