@@ -13,3 +13,4 @@ app/
 # Python Bytecode und Cache ausschließen
 __pycache__/
 *.pyc
+docker-compose.override.yaml
