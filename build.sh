@@ -36,37 +36,52 @@ BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 LOCAL_PREFIX="yt-upload"
 REGISTRY_PREFIX="ghcr.io/chaos7x/${LOCAL_PREFIX}"
 
-# Bestimmen, welcher Präfix genutzt wird
-if [ "$TARGET" = "registry" ]; then
-  IMAGE_NAME="$REGISTRY_PREFIX"
+LOCAL_IMAGE="$LOCAL_PREFIX:$VERSION"
+REGISTRY_IMAGE="$REGISTRY_PREFIX:$VERSION"
+
+# Prüfen, ob das Image lokal bereits existiert
+if docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1; then
+  echo "ℹ️ Lokales Image '$LOCAL_IMAGE' wurde gefunden."
+
+  # Falls das Ziel 'registry' ist, das lokale Image für GHCR retaggen
+  if [ "$TARGET" = "registry" ]; then
+    echo "🔗 Verlinke (tagge) lokales Image für die Registry..."
+    docker tag "$LOCAL_IMAGE" "$REGISTRY_IMAGE"
+
+    if [ "$VERSION" != "dev" ]; then
+      docker tag "$LOCAL_IMAGE" "$REGISTRY_PREFIX:latest"
+    fi
+  fi
 else
-  IMAGE_NAME="$LOCAL_PREFIX"
+  # Image existiert nicht lokal -> regulärer Docker Build
+  if [ "$TARGET" = "registry" ]; then
+    IMAGE_NAME="$REGISTRY_PREFIX"
+  else
+    IMAGE_NAME="$LOCAL_PREFIX"
+  fi
+
+  echo "🔨 Baue Docker-Image (Version: $VERSION, Ziel: $TARGET, Branch: $CURRENT_BRANCH)..."
+
+  TAGS=(-t "$IMAGE_NAME:$VERSION")
+
+  if [ "$VERSION" != "dev" ]; then
+    TAGS+=(-t "$IMAGE_NAME:latest")
+  fi
+
+  docker build -f Dockerfile \
+    --build-arg VERSION="$VERSION" \
+    --build-arg BUILD_DATE="$BUILD_DATE" \
+    --pull \
+    "${TAGS[@]}" .
 fi
-
-echo "Baue Docker-Image (Version: $VERSION, Ziel: $TARGET, Branch: $CURRENT_BRANCH)..."
-
-# Tag-Liste initialisieren
-TAGS=(-t "$IMAGE_NAME:$VERSION")
-
-# Tag 'latest' nur hinzufügen, wenn es sich NICHT um ein 'dev'-Build handelt
-if [ "$VERSION" != "dev" ]; then
-  TAGS+=(-t "$IMAGE_NAME:latest")
-fi
-
-# Docker Build ausführen
-docker build -f Dockerfile \
-  --build-arg VERSION="$VERSION" \
-  --build-arg BUILD_DATE="$BUILD_DATE" \
-  --pull \
-  "${TAGS[@]}" .
 
 # Falls als Ziel 'registry' übergeben wurde, Images pushen
 if [ "$TARGET" = "registry" ]; then
-  echo "Veröffentliche auf GitHub Container Registry..."
-  docker push "$IMAGE_NAME:$VERSION"
+  echo "🚀 Veröffentliche auf GitHub Container Registry..."
+  docker push "$REGISTRY_IMAGE"
 
   if [ "$VERSION" != "dev" ]; then
-    docker push "$IMAGE_NAME:latest"
+    docker push "$REGISTRY_PREFIX:latest"
 
     # Optionalen Git-Tag erzeugen (nur bei Registry-Releases auf main)
     read -p "Möchtest du auch den Git-Tag 'v${VERSION}' erstellen und pushen? (y/N): " -n 1 -r
