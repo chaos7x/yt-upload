@@ -39,21 +39,18 @@ REGISTRY_PREFIX="ghcr.io/chaos7x/${LOCAL_PREFIX}"
 LOCAL_IMAGE="$LOCAL_PREFIX:$VERSION"
 REGISTRY_IMAGE="$REGISTRY_PREFIX:$VERSION"
 
-# Prüfen, ob das Image lokal bereits existiert
-if docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1; then
-  echo "ℹ️ Lokales Image '$LOCAL_IMAGE' wurde gefunden."
+# Prüfen, ob das Image lokal bereits existiert (gilt NICHT für 'dev'-Builds)
+if [ "$VERSION" != "dev" ] && docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1; then
+  echo "ℹ️ Lokales Release-Image '$LOCAL_IMAGE' wurde gefunden (Build wird übersprungen)."
 
   # Falls das Ziel 'registry' ist, das lokale Image für GHCR retaggen
   if [ "$TARGET" = "registry" ]; then
     echo "🔗 Verlinke (tagge) lokales Image für die Registry..."
     docker tag "$LOCAL_IMAGE" "$REGISTRY_IMAGE"
-
-    if [ "$VERSION" != "dev" ]; then
-      docker tag "$LOCAL_IMAGE" "$REGISTRY_PREFIX:latest"
-    fi
+    docker tag "$LOCAL_IMAGE" "$REGISTRY_PREFIX:latest"
   fi
 else
-  # Image existiert nicht lokal -> regulärer Docker Build
+  # Image existiert nicht ODER es ist eine 'dev'-Version -> Docker Build erzwingen
   if [ "$TARGET" = "registry" ]; then
     IMAGE_NAME="$REGISTRY_PREFIX"
   else
