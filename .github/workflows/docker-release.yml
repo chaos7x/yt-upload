@@ -4,12 +4,14 @@ on:
   push:
     tags:
       - 'v*.*.*' # Startet automatisch, wenn ein Tag wie v1.0.0 oder v1.2.3 gepusht wird
+  schedule:
+    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version/Tag zum Bauen (z.B. v1.0.2b1)'
-        required: true
-        default: 'v1.0.0-manual'
+        description: 'Version/Tag (leer lassen für auto-increment)'
+        required: false
+        default: ''
 
 env:
   REGISTRY: ghcr.io
@@ -25,6 +27,40 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # Zwingend nötig, um alle Tags für das Version-Bumping zu lesen
+
+      # Step: Version ermitteln oder automatisch die Patch-Version erhöhen
+      - name: Version berechnen (Auto-Increment Patch)
+        id: bump_version
+        run: |
+          # 1. Neuesten Tag holen (Fallback auf v1.0.0 falls noch kein Tag existiert)
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
+          echo "Letzter bekannter Tag: $LATEST_TAG"
+
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            # Bei normalem Git-Tag Push: Nimm exakt den gepushten Tag
+            TARGET_VERSION="${{ github.ref_name }}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            # Wenn manuell eine explizite Version eingegeben wurde
+            TARGET_VERSION="${{ inputs.version }}"
+          else
+            # Bei Cron/Schedule ODER manuellem Start ohne Eingabe: Patch-Level inkrementieren
+            # Entferne führendes 'v' falls vorhanden
+            CLEAN_TAG="${LATEST_TAG#v}"
+            
+            # Zerlege SemVer (MAJOR.MINOR.PATCH)
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CLEAN_TAG"
+            
+            # Falls Pre-Release Suffixe dranhängen (z.B. 2b1), reinige den Patch-Wert
+            PATCH=$(echo "$PATCH" | grep -o '^[0-9]*')
+            
+            NEW_PATCH=$((PATCH + 1))
+            TARGET_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          fi
+
+          echo "Bauen mit Ziel-Version: $TARGET_VERSION"
+          echo "version=$TARGET_VERSION" >> $GITHUB_OUTPUT
 
       - name: Log in zur GitHub Container Registry
         uses: docker/login-action@v4
@@ -33,14 +69,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker Metadaten extrahieren (Tags, Labels)
+      - name: Docker Metadaten extrahieren
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}},value=${{ inputs.version || github.ref_name }}
+            type=semver,pattern={{version}},value=${{ steps.bump_version.outputs.version }}
             type=raw,value=latest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build und Push Docker Image
         uses: docker/build-push-action@v6
@@ -48,15 +87,18 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: GitHub Release erstellen
+      # Tag & Release auch auf GitHub für automatische Cron-Builds erstellen
+      - name: GitHub Release & Git-Tag erstellen
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
         with:
-          tag_name: ${{ inputs.version || github.ref_name }}
-          name: Release ${{ inputs.version || github.ref_name }}
+          tag_name: ${{ steps.bump_version.outputs.version }}
+          name: Release ${{ steps.bump_version.outputs.version }}
           generate_release_notes: true  # Erstellt automatisch Changelog aus Commits/PRs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
