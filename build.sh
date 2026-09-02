@@ -15,10 +15,10 @@ docker build -f Dockerfile \
 echo "🎉 Build erfolgreich abgeschlossen!"
 
 # Prüfen, ob die Override-Datei für lokale Dev-Builds vorhanden ist
-if [ -f "docker-compose.override.yml" ]; then
+if [ -f "docker-compose.override.yml" ] || [ -f "docker-compose.override.yaml" ]; then
   echo "💡 'docker compose up -d' nutzt jetzt deine lokale 'docker-compose.override.yml'."
 else
   echo "⚠️  HINWEIS: Keine 'docker-compose.override.yml' gefunden!"
   echo "   'docker compose up -d' zieht ohne Override das Image aus der Registry (GHCR)."
-  echo "   Passe ggf. deine .env an oder erstelle eine 'docker-compose.override.yml'."
+  echo "   Passe ggf. deine .env an oder erstelle eine 'docker-compose.override.y(a)ml'."
 fi
