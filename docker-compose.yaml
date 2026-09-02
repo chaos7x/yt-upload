@@ -1,6 +1,6 @@
 services:
   yt-uploader:
-    image: ghcr.io/chaos7x/streamlink-recorder:${IMAGE_VERSION:-latest}
+    image: ghcr.io/chaos7x/yt-upload:${IMAGE_VERSION:-latest}
     container_name: yt-upload
     hostname: yt-upload
     restart: unless-stopped
