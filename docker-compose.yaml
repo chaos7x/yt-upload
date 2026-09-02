@@ -1,7 +1,6 @@
 services:
   yt-uploader:
-    image: yt-upload:1.0.0
-#    image: yt-upload:beta
+    image: ghcr.io/chaos7x/streamlink-recorder:${IMAGE_VERSION:-latest}
     container_name: yt-upload
     hostname: yt-upload
     restart: unless-stopped
@@ -11,12 +10,12 @@ services:
 
     # 1. Das User-Mapping erzwingen (optional, aber Best Practice für Docker)
     user: "11107:11108"
-
     environment:
       - TZ=Europe/Berlin
       - ENABLE_DYNAMIC_PLAYLISTS=true
       - HOME=/tmp  # Hält Schreibzugriffe für Caches/Config aus dem :ro gemounteten /app fern
-
+    env_file:
+      - .env
     volumes:
       # 1. Den App-Ordner (inklusive deiner lokalen upload.sh) einbinden
       # - app:/app:ro
