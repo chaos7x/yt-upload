@@ -22,6 +22,12 @@ verlustfrei in Segmente (-c copy) und lädt sie auf YouTube hoch.
 import json
 import logging
 import os
+# Muss vor dem Import von inotify stehen, da die Bibliothek
+# os.environ.get('DEBUG') ungesichert als int() auswertet.
+if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
+    os.environ['DEBUG'] = '1'
+else:
+    os.environ['DEBUG'] = '0'
 import re
 import shutil
 import subprocess
