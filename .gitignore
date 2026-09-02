@@ -14,3 +14,5 @@ app/
 __pycache__/
 *.pyc
 docker-compose.override.yaml
+# Environminet Datei ausschließen
+.env
