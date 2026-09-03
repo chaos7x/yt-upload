@@ -34,6 +34,7 @@ import subprocess
 import sys
 import time
 import inotify.adapters
+import unicodedata
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -186,6 +187,31 @@ def wait_for_input():
 # ==========================================
 # METADATEN & THUMBNAIL (FFPROBE / FFMPEG)
 # ==========================================
+def sanitize_text(text):
+    """
+    Entfernt Emojis, Zalgo-Diakritika und störende Sonder-Symbole.
+    Erhält normale Buchstaben, Zahlen, deutsche Umlaute und Basissonderzeichen.
+    """
+    if not text:
+        return text
+
+    # NFKD-Normalisierung zerlegt kombinierte Zeichen in Basiszeichen + Akzent
+    normalized = unicodedata.normalize('NFKD', text)
+    
+    cleaned_chars = []
+    for c in normalized:
+        # Mn = Nonspacing Mark (z.B. Zalgo-Striche)
+        # So = Symbol, Other (z.B. Emojis, Pfeile, mathematische Symbole)
+        if unicodedata.category(c) not in ('Mn', 'So'):
+            cleaned_chars.append(c)
+
+    # Zurück zu NFC fügen (damit Umlaute wie ä, ö, ü wieder zusammengesetzt werden)
+    result = unicodedata.normalize('NFC', ''.join(cleaned_chars))
+    
+    # Mehrfache Leerzeichen bereinigen
+    return re.sub(r'\s+', ' ', result).strip()
+
+
 def extract_metadata_and_thumb(file_path):
     metadata = {
         "title": None,
@@ -217,12 +243,13 @@ def extract_metadata_and_thumb(file_path):
         if "duration" in format_info:
             metadata["duration"] = int(float(format_info["duration"]))
 
-        metadata["title"] = tags.get("TITLE")
+        # Bereinigung auf Titel, Beschreibung und Artist anwenden:
+        metadata["title"] = sanitize_text(tags.get("TITLE"))
         metadata["description"] = tags.get("DESCRIPTION") or tags.get("COMMENT")
         metadata["purl"] = tags.get("PURL")
         metadata["genre"] = tags.get("GENRE")
         metadata["date"] = tags.get("DATE")
-        metadata["artist"] = tags.get("ARTIST") or tags.get("ALBUM_ARTIST")
+        metadata["artist"] = sanitize_text(tags.get("ARTIST") or tags.get("ALBUM_ARTIST"))
 
     except Exception as e:
         logging.error(f"Fehler beim Auslesen der Metadaten via FFprobe: {e}")
