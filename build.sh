@@ -5,11 +5,16 @@ VERSION="${1:-dev}"
 IMAGE_NAME="yt-upload"
 BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+echo "🔍 Prüfe neuesten Commit von tokland/youtube-upload..."
+YT_UPLOAD_REF="$(git ls-remote https://github.com/tokland/youtube-upload.git HEAD | cut -f1)"
+echo "📌 Ref: ${YT_UPLOAD_REF}"
+
 echo "🔨 Baue lokales Docker-Image (${IMAGE_NAME}:${VERSION})..."
 
 docker build -f Dockerfile \
   --build-arg VERSION="$VERSION" \
   --build-arg BUILD_DATE="$BUILD_DATE" \
+  --build-arg YT_UPLOAD_REF="$YT_UPLOAD_REF" \
   -t "${IMAGE_NAME}:${VERSION}" .
 
 echo "🎉 Build erfolgreich abgeschlossen!"
