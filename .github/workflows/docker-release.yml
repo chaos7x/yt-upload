@@ -62,6 +62,15 @@ jobs:
           echo "Bauen mit Ziel-Version: $TARGET_VERSION"
           echo "version=$TARGET_VERSION" >> $GITHUB_OUTPUT
 
+      # Step: Aktuellsten Commit-Hash des externen Upstream-Repositories abfragen
+      # Verhindert veraltete Builds bei der Multi-Stage-Erstellung (Cache-Buster)
+      - name: Neuesten tokland/youtube-upload Commit abfragen
+        id: yt_upstream
+        run: |
+          UPSTREAM_HASH=$(git ls-remote https://github.com/tokland/youtube-upload.git HEAD 2>/dev/null | cut -f1 || echo "master")
+          echo "Upstream Commit-Hash: $UPSTREAM_HASH"
+          echo "hash=$UPSTREAM_HASH" >> $GITHUB_OUTPUT
+
       - name: Log in zur GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -90,6 +99,10 @@ jobs:
           pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Dynamische Build-Argumente an die Builder-Stage übergeben
+          build-args: |
+            VERSION=${{ steps.bump_version.outputs.version }}
+            YT_UPLOAD_REF=${{ steps.yt_upstream.outputs.hash }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
