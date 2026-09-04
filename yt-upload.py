@@ -372,7 +372,12 @@ def split_video_if_needed(work_path):
         "-segment_time", str(SEGMENT_TIME_SEC), "-reset_timestamps", "1",
         segment_pattern
     ]
-    subprocess.run(cmd_split, capture_output=True, text=True, check=True)
+
+    try:
+        subprocess.run(cmd_split, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"FFmpeg Splitting fehlgeschlagen: {e.stderr}")
+        raise
 
     created_segments = []
     part_idx = 1
