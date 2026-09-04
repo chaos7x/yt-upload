@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*.*.*' # Startet automatisch, wenn ein Tag wie v1.0.0 oder v1.2.3 gepusht wird
+    branches:
+      - main     # Registriert Pushes auf main, um sie im Skript gezielt zu überspringen
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
@@ -30,7 +32,7 @@ jobs:
         with:
           fetch-depth: 0 # Zwingend nötig, um alle Tags für das Version-Bumping zu lesen
 
-      # Step: Version ermitteln ODER abbrechen, falls weder eigener Code noch Upstream geändert wurden
+      # Step: Version ermitteln ODER abbrechen, falls Push ohne Tag oder im Cron keine Ändung vorliegt
       - name: Version berechnen & Upstream-Änderungen prüfen
         id: bump_version
         run: |
@@ -49,7 +51,14 @@ jobs:
           echo "Letzter eigener Tag: $LATEST_TAG ($TAG_COMMIT)"
           echo "Aktueller HEAD: $HEAD_COMMIT"
 
-          # 2. Upstream-Hashes für Cache-Check / Vergleich holen
+          # 2. Reiner Push auf Branch OHNE Tag -> Abbrechen (kein Release erstellen)
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" != refs/tags/* ]]; then
+            echo "Normaler Commit/Push auf Branch ohne Git-Tag. Release-Build wird übersprungen."
+            echo "skip_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # 3. Upstream-Hashes für Cache-Check / Vergleich holen
           CURRENT_YT_HASH=$(git ls-remote https://github.com/tokland/youtube-upload.git HEAD 2>/dev/null | cut -f1 || echo "master")
           DEBIAN_DIGEST=$(docker manifest inspect debian:trixie-slim 2>/dev/null | grep -m 1 "digest" | awk -F '"' '{print $4}' || echo "")
           FFMPEG_DIGEST=$(docker manifest inspect mwader/static-ffmpeg:7.1 2>/dev/null | grep -m 1 "digest" | awk -F '"' '{print $4}' || echo "")
@@ -58,7 +67,7 @@ jobs:
           CURRENT_FINGERPRINT=$(echo "${HEAD_COMMIT}:${CURRENT_YT_HASH}:${DEBIAN_DIGEST}:${FFMPEG_DIGEST}" | sha256sum | awk '{print $1}')
           echo "Aktueller System-Fingerprint: $CURRENT_FINGERPRINT"
 
-          # 3. Bei Cronjob prüfen, ob sich der Fingerprint seit dem letzten Release geändert hat
+          # 4. Bei Cronjob prüfen, ob sich der Fingerprint seit dem letzten Release geändert hat
           SKIP_BUILD="false"
           if [ "${{ github.event_name }}" = "schedule" ] && [ -n "$LATEST_TAG" ]; then
             # Holen des Fingerprints aus dem letzten GitHub Release Body
@@ -78,7 +87,7 @@ jobs:
             exit 0
           fi
 
-          # 4. Target-Version festlegen
+          # 5. Target-Version festlegen
           if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TARGET_VERSION="${{ github.ref_name }}"
           elif [ -n "${{ inputs.version }}" ]; then
