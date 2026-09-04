@@ -30,48 +30,77 @@ jobs:
         with:
           fetch-depth: 0 # Zwingend nötig, um alle Tags für das Version-Bumping zu lesen
 
-      # Step: Version ermitteln oder automatisch die Patch-Version erhöhen
-      - name: Version berechnen (Auto-Increment Patch)
+      # Step: Version ermitteln ODER abbrechen, falls weder eigener Code noch Upstream geändert wurden
+      - name: Version berechnen & Upstream-Änderungen prüfen
         id: bump_version
         run: |
-          # 1. Neuesten Tag holen (Fallback auf v1.0.0 falls noch kein Tag existiert)
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
-          echo "Letzter bekannter Tag: $LATEST_TAG"
+          # 1. Neuesten eigenen Tag und dessen Commit-Hash ermitteln
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          if [ -n "$LATEST_TAG" ]; then
+            TAG_COMMIT=$(git rev-parse "$LATEST_TAG^{commit}" 2>/dev/null || echo "")
+          else
+            TAG_COMMIT=""
+            LATEST_TAG="v1.0.0"
+          fi
 
+          HEAD_COMMIT=$(git rev-parse HEAD)
+
+          echo "Letzter eigener Tag: $LATEST_TAG ($TAG_COMMIT)"
+          echo "Aktueller HEAD: $HEAD_COMMIT"
+
+          # 2. Upstream-Hashes für Cache-Check / Vergleich holen
+          CURRENT_YT_HASH=$(git ls-remote https://github.com/tokland/youtube-upload.git HEAD 2>/dev/null | cut -f1 || echo "master")
+          DEBIAN_DIGEST=$(docker manifest inspect debian:trixie-slim 2>/dev/null | grep -m 1 "digest" | awk -F '"' '{print $4}' || echo "")
+          FFMPEG_DIGEST=$(docker manifest inspect mwader/static-ffmpeg:7.1 2>/dev/null | grep -m 1 "digest" | awk -F '"' '{print $4}' || echo "")
+
+          # Kombinierten Fingerprint aller Quellen erstellen
+          CURRENT_FINGERPRINT=$(echo "${HEAD_COMMIT}:${CURRENT_YT_HASH}:${DEBIAN_DIGEST}:${FFMPEG_DIGEST}" | sha256sum | awk '{print $1}')
+          echo "Aktueller System-Fingerprint: $CURRENT_FINGERPRINT"
+
+          # 3. Bei Cronjob prüfen, ob sich der Fingerprint seit dem letzten Release geändert hat
+          SKIP_BUILD="false"
+          if [ "${{ github.event_name }}" = "schedule" ] && [ -n "$LATEST_TAG" ]; then
+            # Holen des Fingerprints aus dem letzten GitHub Release Body
+            LAST_RELEASE_BODY=$(gh release view "$LATEST_TAG" --json body -q ".body" 2>/dev/null || echo "")
+            LAST_FINGERPRINT=$(echo "$LAST_RELEASE_BODY" | grep -o 'Fingerprint: [a-f0-9]*' | awk '{print $2}' || echo "")
+
+            echo "Letzter Release-Fingerprint: $LAST_FINGERPRINT"
+
+            if [ -n "$LAST_FINGERPRINT" ] && [ "$CURRENT_FINGERPRINT" = "$LAST_FINGERPRINT" ]; then
+              echo "Keine Änderungen in eigenem Code oder Upstream-Quellen (Debian/FFmpeg/yt-upload). Abbruch."
+              SKIP_BUILD="true"
+            fi
+          fi
+
+          if [ "$SKIP_BUILD" = "true" ]; then
+            echo "skip_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # 4. Target-Version festlegen
           if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            # Bei normalem Git-Tag Push: Nimm exakt den gepushten Tag
             TARGET_VERSION="${{ github.ref_name }}"
           elif [ -n "${{ inputs.version }}" ]; then
-            # Wenn manuell eine explizite Version eingegeben wurde
             TARGET_VERSION="${{ inputs.version }}"
           else
-            # Bei Cron/Schedule ODER manuellem Start ohne Eingabe: Patch-Level inkrementieren
-            # Entferne führendes 'v' falls vorhanden
             CLEAN_TAG="${LATEST_TAG#v}"
-            
-            # Zerlege SemVer (MAJOR.MINOR.PATCH)
             IFS='.' read -r MAJOR MINOR PATCH <<< "$CLEAN_TAG"
-            
-            # Falls Pre-Release Suffixe dranhängen (z.B. 2b1), reinige den Patch-Wert
             PATCH=$(echo "$PATCH" | grep -o '^[0-9]*')
-            
             NEW_PATCH=$((PATCH + 1))
             TARGET_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
           fi
 
           echo "Bauen mit Ziel-Version: $TARGET_VERSION"
           echo "version=$TARGET_VERSION" >> $GITHUB_OUTPUT
-
-      # Step: Aktuellsten Commit-Hash des externen Upstream-Repositories abfragen
-      # Verhindert veraltete Builds bei der Multi-Stage-Erstellung (Cache-Buster)
-      - name: Neuesten tokland/youtube-upload Commit abfragen
-        id: yt_upstream
-        run: |
-          UPSTREAM_HASH=$(git ls-remote https://github.com/tokland/youtube-upload.git HEAD 2>/dev/null | cut -f1 || echo "master")
-          echo "Upstream Commit-Hash: $UPSTREAM_HASH"
-          echo "hash=$UPSTREAM_HASH" >> $GITHUB_OUTPUT
+          echo "fingerprint=$CURRENT_FINGERPRINT" >> $GITHUB_OUTPUT
+          echo "yt_hash=$CURRENT_YT_HASH" >> $GITHUB_OUTPUT
+          echo "skip_build=false" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in zur GitHub Container Registry
+        if: steps.bump_version.outputs.skip_build != 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -79,6 +108,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker Metadaten extrahieren
+        if: steps.bump_version.outputs.skip_build != 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -89,12 +119,15 @@ jobs:
 
       # NÖTIG FÜR MULTI-ARCH: QEMU Emulation aktivieren
       - name: Set up QEMU
+        if: steps.bump_version.outputs.skip_build != 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
+        if: steps.bump_version.outputs.skip_build != 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Build und Push Docker Image (Multi-Arch)
+        if: steps.bump_version.outputs.skip_build != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -104,19 +137,22 @@ jobs:
           pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Dynamische Build-Argumente an die Builder-Stage übergeben
           build-args: |
             VERSION=${{ steps.bump_version.outputs.version }}
-            YT_UPLOAD_REF=${{ steps.yt_upstream.outputs.hash }}
+            YT_UPLOAD_REF=${{ steps.bump_version.outputs.yt_hash }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       # Tag & Release auch auf GitHub für automatische Cron-Builds erstellen
       - name: GitHub Release & Git-Tag erstellen
+        if: steps.bump_version.outputs.skip_build != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.bump_version.outputs.version }}
           name: Release ${{ steps.bump_version.outputs.version }}
-          generate_release_notes: true  # Erstellt automatisch Changelog aus Commits/PRs
+          body: |
+            Automated Release ${{ steps.bump_version.outputs.version }}
+            Fingerprint: ${{ steps.bump_version.outputs.fingerprint }}
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
