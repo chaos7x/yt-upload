@@ -12,22 +12,25 @@
 # GNU General Public License for more details.
 
 """
-Automatischer YouTube Upload Worker (FFmpeg / FFprobe native).
+Automatischer YouTube Upload Worker (Native HTTP / FFmpeg / FFprobe).
 
 Überwacht ein Verzeichnis via inotify.adapters (python3-inotify),
 liest Metadaten & Thumbnails via FFprobe/FFmpeg aus, zerlegt Videos > 10 Stunden
-verlustfrei in Segmente (-c copy) und lädt sie auf YouTube hoch.
+verlustfrei in Segmente (-c copy) und lädt sie direkt via REST API (Resumable Upload)
+auf YouTube hoch – völlig unabhängig von youtube-upload.
 """
 
 import json
 import logging
 import os
+
 # Muss vor dem Import von inotify stehen, da die Bibliothek
 # os.environ.get('DEBUG') ungesichert als int() auswertet.
 if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
     os.environ['DEBUG'] = '1'
 else:
     os.environ['DEBUG'] = '0'
+
 import re
 import shutil
 import subprocess
@@ -36,9 +39,8 @@ import time
 import inotify.adapters
 import unicodedata
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+# Einzige externe HTTP-Bibliothek für die REST-API
+import requests
 
 # ==========================================
 # KONFIGURATION & PATHS
@@ -52,19 +54,20 @@ LOG_FILE = "/log/upload.log"
 SEGMENT_TIME_SEC = 36000  # 10 Stunden Limit (in Sekunden)
 
 DEFAULT_DESCRIPTION = "Automatischer Upload via Script."
-DEFAULT_TAGS = "Upload, Video"
-DEFAULT_CATEGORY = "Entertainment"
+DEFAULT_TAGS = ["Upload", "Video"]
+DEFAULT_CATEGORY_ID = "24"  # 24 = Entertainment (YouTube Category ID)
 
 # Feature-Flags / Environment (Standard: off)
 DYNAMIC_PLAYLISTS = os.getenv("ENABLE_DYNAMIC_PLAYLISTS", "false").lower() in ("1", "true", "yes")
 
 VIDEO_PRIVACY = "unlisted"  # 'public', 'private', 'unlisted'
 VIDEO_LANGUAGE = "de"
-ALLOW_EMBEDDING = "True"
 
 CLIENT_SECRETS = "/app/oauth/client_secrets.json"
 CREDENTIALS_FILE = "/app/oauth/youtube-upload-credentials.json"
 PLAYLIST_NAME = ""  # Fallback-Playlist (leer lassen, wenn ohne Tag keine Playlist genutzt werden soll)
+
+CHUNK_SIZE = 100 * 1024 * 1024  # 100 MB Upload-Chunks (Vielfaches von 256 KB)
 
 # Logging aufsetzen
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
@@ -82,13 +85,11 @@ logging.basicConfig(
 # HELPER & CLEANUP
 # ==========================================
 def ensure_directories():
-    # Stellt sicher, dass alle benötigten Basisverzeichnisse existieren
     for d in [IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR]:
         os.makedirs(d, exist_ok=True)
 
 
 def cleanup_work_dir():
-    # Räumt das Arbeitsverzeichnis bei unvorhergesehenen Fehlern auf
     logging.warning("Bereinige WORK-Verzeichnis...")
     if os.path.exists(WORK_DIR):
         for item in os.listdir(WORK_DIR):
@@ -103,10 +104,6 @@ def cleanup_work_dir():
 
 
 def is_file_ready_and_valid(file_path):
-    """
-    Prüft, ob die Datei stabil ist (Dateigröße verändert sich nicht mehr)
-    und ob FFprobe den Container/moov-Atom fehlerfrei auslesen kann.
-    """
     try:
         initial_size = os.path.getsize(file_path)
         time.sleep(2)
@@ -137,7 +134,6 @@ def is_file_ready_and_valid(file_path):
 # INOTIFY & INPUT FINDER
 # ==========================================
 def find_existing_video():
-    # Sucht rekursiv nach bereits vorhandenen Videodateien im Eingangspfad
     valid_exts = (".mp4", ".mkv", ".mov", ".m4v")
     for root, _, files in os.walk(IN_DIR):
         for file in files:
@@ -147,7 +143,6 @@ def find_existing_video():
 
 
 def wait_for_input():
-    # Prüft zuerst auf Altlasten, wartet ansonsten ereignisbasiert auf neue Dateien
     existing = find_existing_video()
     if existing:
         logging.info(f"Bestehende Datei gefunden: {existing}")
@@ -162,7 +157,6 @@ def wait_for_input():
         try:
             for event in i.event_gen(yield_nones=False, timeout_s=60):
                 if event is None:
-                    # Stiller Fallback-Check ohne Log-Spam
                     existing = find_existing_video()
                     if existing:
                         logging.info(f"Datei via Fallback-Timer erkannt: {existing}")
@@ -188,27 +182,12 @@ def wait_for_input():
 # METADATEN & THUMBNAIL (FFPROBE / FFMPEG)
 # ==========================================
 def sanitize_text(text):
-    """
-    Entfernt Emojis, Zalgo-Diakritika und störende Sonder-Symbole.
-    Erhält normale Buchstaben, Zahlen, deutsche Umlaute und Basissonderzeichen.
-    """
     if not text:
         return text
 
-    # NFKD-Normalisierung zerlegt kombinierte Zeichen in Basiszeichen + Akzent
     normalized = unicodedata.normalize('NFKD', text)
-    
-    cleaned_chars = []
-    for c in normalized:
-        # Mn = Nonspacing Mark (z.B. Zalgo-Striche)
-        # So = Symbol, Other (z.B. Emojis, Pfeile, mathematische Symbole)
-        if unicodedata.category(c) not in ('Mn', 'So'):
-            cleaned_chars.append(c)
-
-    # Zurück zu NFC fügen (damit Umlaute wie ä, ö, ü wieder zusammengesetzt werden)
+    cleaned_chars = [c for c in normalized if unicodedata.category(c) not in ('Mn', 'So')]
     result = unicodedata.normalize('NFC', ''.join(cleaned_chars))
-    
-    # Mehrfache Leerzeichen bereinigen
     return re.sub(r'\s+', ' ', result).strip()
 
 
@@ -219,12 +198,11 @@ def extract_metadata_and_thumb(file_path):
         "purl": None,
         "genre": None,
         "date": None,
-        "artist": None,  # Artist-Tag für dynamische Playlists
+        "artist": None,
         "thumb_path": None,
         "duration": 0,
     }
 
-    # 1. Metadaten & Gesamtdauer via FFprobe auslesen
     try:
         cmd_probe = [
             "ffprobe",
@@ -243,7 +221,6 @@ def extract_metadata_and_thumb(file_path):
         if "duration" in format_info:
             metadata["duration"] = int(float(format_info["duration"]))
 
-        # Bereinigung auf Titel, Beschreibung und Artist anwenden:
         metadata["title"] = sanitize_text(tags.get("TITLE"))
         metadata["description"] = tags.get("DESCRIPTION") or tags.get("COMMENT")
         metadata["purl"] = tags.get("PURL")
@@ -254,7 +231,6 @@ def extract_metadata_and_thumb(file_path):
     except Exception as e:
         logging.error(f"Fehler beim Auslesen der Metadaten via FFprobe: {e}")
 
-    # 2. Thumbnail extrahieren (MKV, MP4/MOV/M4V & Fallback)
     thumb_path = "/tmp/thumb_temp.jpg"
     temp_attach = "/tmp/attach_temp"
 
@@ -263,57 +239,34 @@ def extract_metadata_and_thumb(file_path):
             os.remove(p)
 
     try:
-        # 2a. Versuch: MKV-Attachment dumpen (WebP/PNG/JPG)
-        cmd_mkv = [
-            "ffmpeg",
-            "-y",
-            "-dump_attachment:t:0", temp_attach,
-            "-i", file_path
-        ]
+        cmd_mkv = ["ffmpeg", "-y", "-dump_attachment:t:0", temp_attach, "-i", file_path]
         subprocess.run(cmd_mkv, capture_output=True, text=True)
 
-        # 2b. Versuch: MP4/MOV/M4V Cover-Stream extrahieren
         if not os.path.exists(temp_attach) or os.path.getsize(temp_attach) == 0:
             cmd_mp4 = [
-                "ffmpeg",
-                "-y",
-                "-i", file_path,
-                "-map", "0:v",
-                "-map", "-0:V",  # Filtert gezielt auf Still-Images/Cover
-                "-c", "copy",
-                temp_attach
+                "ffmpeg", "-y", "-i", file_path,
+                "-map", "0:v", "-map", "-0:V",
+                "-c", "copy", temp_attach
             ]
             subprocess.run(cmd_mp4, capture_output=True, text=True)
 
-        # Konvertierung zu JPEG falls Cover gefunden wurde
         if os.path.exists(temp_attach) and os.path.getsize(temp_attach) > 0:
-            cmd_conv = [
-                "ffmpeg",
-                "-y",
-                "-i", temp_attach,
-                "-q:v", "2",
-                thumb_path
-            ]
+            cmd_conv = ["ffmpeg", "-y", "-i", temp_attach, "-q:v", "2", thumb_path]
             subprocess.run(cmd_conv, capture_output=True, text=True)
             if os.path.exists(temp_attach):
                 os.remove(temp_attach)
 
-        # 2c. Fallback: Frame nach 1 Sekunde grabben
         if not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0:
             cmd_frame = [
-                "ffmpeg",
-                "-y",
-                "-ss", "00:00:01",
-                "-i", file_path,
-                "-vframes", "1",
-                "-q:v", "2",
-                thumb_path
+                "ffmpeg", "-y", "-ss", "00:00:01",
+                "-i", file_path, "-vframes", "1",
+                "-q:v", "2", thumb_path
             ]
             subprocess.run(cmd_frame, capture_output=True, text=True)
 
         if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
             metadata["thumb_path"] = thumb_path
-            logging.info("Thumbnail erfolgreich extrahiert und als JPEG aufbereitet.")
+            logging.info("Thumbnail erfolgreich extrahiert.")
 
     except Exception as e:
         logging.warning(f"Konnte kein Thumbnail extrahieren: {e}")
@@ -325,11 +278,9 @@ def extract_metadata_and_thumb(file_path):
 # FFMPEG LOSSLESS SPLITTER
 # ==========================================
 def split_video_if_needed(work_path):
-    # Prüft die Videolänge und teilt die Datei verlustfrei auf, wenn sie das Limit überschreitet
     try:
         cmd_probe = [
-            "ffprobe",
-            "-v", "error",
+            "ffprobe", "-v", "error",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",
             work_path
@@ -340,9 +291,7 @@ def split_video_if_needed(work_path):
         logging.error(f"Fehler bei Dauer-Ermittlung vor Splitting: {e}")
         return [work_path]
 
-    logging.info(
-        f"Videolänge: {int(duration_sec)} Sekunden ({duration_sec / 3600:.2f} Stunden)"
-    )
+    logging.info(f"Videolänge: {int(duration_sec)} Sekunden ({duration_sec / 3600:.2f} Stunden)")
 
     if duration_sec <= SEGMENT_TIME_SEC:
         return [work_path]
@@ -354,11 +303,8 @@ def split_video_if_needed(work_path):
     segment_pattern = os.path.join(WORK_DIR, f"{base_name}_part%02d{ext}")
 
     cmd_split = [
-        "ffmpeg",
-        "-y",
-        "-i", work_path,
-        "-c", "copy",
-        "-map", "0",
+        "ffmpeg", "-y", "-i", work_path,
+        "-c", "copy", "-map", "0",
         "-avoid_negative_ts", "make_zero",
         "-f", "segment",
         "-segment_time", str(SEGMENT_TIME_SEC),
@@ -385,155 +331,205 @@ def split_video_if_needed(work_path):
     if os.path.exists(work_path):
         os.remove(work_path)
 
-    logging.info(
-        f"Segmentierung abgeschlossen. {len(created_segments)} Segmente erzeugt."
-    )
+    logging.info(f"Segmentierung abgeschlossen. {len(created_segments)} Segmente erzeugt.")
     return created_segments
 
 
 # ==========================================
-# YOUTUBE UPLOADER CLI & API PLAYLIST HELPER
+# NATIVE REST API (OAUTH2, UPLOAD & PLAYLIST)
 # ==========================================
-def get_auth_flags():
-    # Gibt die Authentifizierungsflags für das CLI-Tool zurück
-    return [
-        f"--client-secrets={CLIENT_SECRETS}",
-        f"--credentials-file={CREDENTIALS_FILE}",
-    ]
-
-
-def add_video_to_playlist_via_api(video_id, playlist_name):
-    """
-    Fügt ein bereits hochgeladenes Video separat und fehlerresistent
-    über den googleapiclient zur Playlist hinzu (verhindert CLI 409-Abbrüche).
-    """
-    if not playlist_name or not video_id:
-        return False
-
+def get_access_token():
+    """Hole frischen OAuth2 Access Token über den gespeicherten Refresh Token."""
     try:
-        # OAuth-Credentials für den API-Client laden
-        creds = Credentials.from_authorized_user_file(CREDENTIALS_FILE)
-        youtube = build("youtube", "v3", credentials=creds)
+        with open(CREDENTIALS_FILE, 'r') as f:
+            creds = json.load(f)
 
-        # 1. Playlist suchen oder bei Bedarf anlegen
+        refresh_token = creds.get("refresh_token")
+        client_id = creds.get("client_id")
+        client_secret = creds.get("client_secret")
+
+        if not client_id or not client_secret:
+            with open(CLIENT_SECRETS, 'r') as f:
+                secrets = json.load(f).get("installed", {})
+                client_id = secrets.get("client_id")
+                client_secret = secrets.get("client_secret")
+
+        url = "https://oauth2.googleapis.com/token"
+        data = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token"
+        }
+
+        res = requests.post(url, data=data, timeout=30)
+        res.raise_for_status()
+        return res.json()["access_token"]
+
+    except Exception as e:
+        logging.error(f"Fehler beim Erneuern des OAuth2 Tokens: {e}")
+        raise
+
+
+def add_video_to_playlist_native(access_token, video_id, playlist_name):
+    """Fügt ein Video nativ per REST-API einer Playlist hinzu."""
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        # 1. Suchen
+        list_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50"
+        res = requests.get(list_url, headers=headers, timeout=30)
         playlist_id = None
-        request = youtube.playlists().list(part="snippet", mine=True, maxResults=50)
-        while request:
-            response = request.execute()
-            for item in response.get("items", []):
+
+        if res.status_code == 200:
+            for item in res.json().get("items", []):
                 if item["snippet"]["title"].lower() == playlist_name.lower():
                     playlist_id = item["id"]
                     break
-            if playlist_id:
-                break
-            request = youtube.playlists().list_next(request, response)
 
+        # 2. Erstellen falls nicht vorhanden
         if not playlist_id:
-            logging.info(f"Erstelle neue Playlist über API: {playlist_name}")
-            playlist_res = youtube.playlists().insert(
-                part="snippet,status",
-                body={
-                    "snippet": {"title": playlist_name, "description": "Automatisch erstellt"},
-                    "status": {"privacyStatus": VIDEO_PRIVACY}
-                }
-            ).execute()
-            playlist_id = playlist_res["id"]
+            logging.info(f"Erstelle neue Playlist via REST API: {playlist_name}")
+            create_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet,status"
+            create_body = {
+                "snippet": {"title": playlist_name, "description": "Automatisch erstellt"},
+                "status": {"privacyStatus": VIDEO_PRIVACY}
+            }
+            res_create = requests.post(create_url, headers=headers, json=create_body, timeout=30)
+            if res_create.status_code in (200, 201):
+                playlist_id = res_create.json()["id"]
 
-        # 2. Video zur Playlist hinzufügen mit integriertem Retry für Transienten
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
-            try:
-                youtube.playlistItems().insert(
-                    part="snippet",
-                    body={
-                        "snippet": {
-                            "playlistId": playlist_id,
-                            "resourceId": {"kind": "youtube#video", "videoId": video_id}
-                        }
-                    }
-                ).execute()
-                logging.info(f"Video {video_id} erfolgreich via API zur Playlist '{playlist_name}' hinzugefügt.")
-                return True
-            except HttpError as e:
-                logging.warning(f"API-Fehler beim Hinzufügen zur Playlist (Versuch {attempt}/{max_retries}): {e}")
-                if attempt == max_retries:
-                    logging.error("Konnte Video nach mehreren API-Versuchen nicht zur Playlist hinzufügen.")
-                    return False
-                time.sleep(10)
+        # 3. Hinzufügen
+        if playlist_id:
+            item_url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet"
+            item_body = {
+                "snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {"kind": "youtube#video", "videoId": video_id}
+                }
+            }
+            res_item = requests.post(item_url, headers=headers, json=item_body, timeout=30)
+            if res_item.status_code in (200, 201):
+                logging.info(f"Video {video_id} zur Playlist '{playlist_name}' hinzugefügt.")
+            else:
+                logging.warning(f"Playlist-Zuordnung fehlgeschlagen: {res_item.text}")
 
     except Exception as e:
-        logging.error(f"Fehler bei der Playlist-API-Verbindung: {e}")
-        return False
+        logging.error(f"Fehler bei Playlist-REST-API: {e}")
 
 
 def upload_single_video(
     file_path, title, desc, category, tags, rec_date, thumb_path, playlist_name
 ):
-    logging.info(f"Lade hoch ({VIDEO_PRIVACY}): {os.path.basename(file_path)}")
+    """Lädt ein Video nativ per HTTP Resumable Upload hoch."""
+    logging.info(f"Lade hoch via native HTTP REST API ({VIDEO_PRIVACY}): {os.path.basename(file_path)}")
 
-    # Basis-Upload-Befehl aufbauen (ohne Playlist, um Konflikte zu vermeiden)
-    cmd = [
-        "youtube-upload",
-        *get_auth_flags(),
-        f"--title={title}",
-        f"--description={desc}",
-        f"--category={category}",
-        f"--tags={tags}",
-        f"--privacy={VIDEO_PRIVACY}",
-        f"--default-language={VIDEO_LANGUAGE}",
-        f"--default-audio-language={VIDEO_LANGUAGE}",
-        f"--embeddable={ALLOW_EMBEDDING}",
-        "--chunksize=104857600",
-    ]
+    access_token = get_access_token()
+    file_size = os.path.getsize(file_path)
+
+    # Convert tags string to list if necessary
+    if isinstance(tags, str):
+        tags_list = [t.strip() for t in tags.split(",") if t.strip()]
+    else:
+        tags_list = tags or DEFAULT_TAGS
+
+    # 1. Resumable Session initiieren
+    init_url = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Upload-Content-Length": str(file_size),
+        "X-Upload-Content-Type": "video/mp4"
+    }
+
+    body = {
+        "snippet": {
+            "title": title,
+            "description": desc,
+            "categoryId": str(DEFAULT_CATEGORY_ID),
+            "tags": tags_list,
+            "defaultLanguage": VIDEO_LANGUAGE,
+            "defaultAudioLanguage": VIDEO_LANGUAGE
+        },
+        "status": {
+            "privacyStatus": VIDEO_PRIVACY,
+            "embeddable": True
+        }
+    }
 
     if rec_date:
-        cmd.append(f"--recording-date={rec_date}")
-    if thumb_path and os.path.exists(thumb_path):
-        cmd.append(f"--thumbnail={thumb_path}")
+        body["snippet"]["recordingDate"] = rec_date
 
-    cmd.append(file_path)
+    logging.info("Initialisiere Resumable Upload Session...")
+    res_init = requests.post(init_url, headers=headers, json=body, timeout=30)
 
-    # Retry-Schleife für den reinen Videoupload
-    max_retries = 3
+    if res_init.status_code != 200:
+        logging.error(f"API Init Fehlgeschlagen: {res_init.status_code} - {res_init.text}")
+        raise RuntimeError(f"API Init Failed: {res_init.text}")
+
+    upload_url = res_init.headers.get("Location")
+    if not upload_url:
+        raise RuntimeError("Keine Upload-Location erhalten!")
+
+    # 2. Chunks hochladen
+    logging.info(f"Starte Chunk-Upload ({file_size / (1024*1024):.2f} MB)...")
     video_id = None
-    for attempt in range(1, max_retries + 1):
+
+    with open(file_path, "rb") as f:
+        offset = 0
+        while offset < file_size:
+            chunk = f.read(CHUNK_SIZE)
+            chunk_len = len(chunk)
+            start_byte = offset
+            end_byte = offset + chunk_len - 1
+
+            chunk_headers = {
+                "Content-Length": str(chunk_len),
+                "Content-Range": f"bytes {start_byte}-{end_byte}/{file_size}"
+            }
+
+            logging.info(f"Sende Bytes {start_byte}-{end_byte}/{file_size}...")
+
+            for attempt in range(1, 4):
+                try:
+                    res_chunk = requests.put(upload_url, headers=chunk_headers, data=chunk, timeout=300)
+                    if res_chunk.status_code in (200, 201):
+                        video_id = res_chunk.json().get("id")
+                        logging.info(f"Upload ERFOLGREICH! Video-ID: {video_id}")
+                        break
+                    elif res_chunk.status_code == 308:
+                        break  # Chunk erfolgreich akzeptiert
+                    else:
+                        logging.warning(f"Status {res_chunk.status_code} bei Chunk. Versuch {attempt}/3")
+                        time.sleep(5)
+                except requests.RequestException as e:
+                    logging.warning(f"Netzwerkfehler: {e}. Versuch {attempt}/3")
+                    time.sleep(10)
+
+            offset += chunk_len
+
+    if not video_id:
+        raise RuntimeError("Upload beendet, aber keine Video-ID erhalten.")
+
+    # 3. Thumbnail setzen
+    if thumb_path and os.path.exists(thumb_path) and video_id:
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            output_text = res.stdout.strip()
-            logging.info(f"Upload erfolgreich! Output:\n{output_text}")
-            
-            # Video-ID aus der Konsolenausgabe extrahieren
-            match = re.search(r'(?:watch\?v=|youtu\.be/)([a-zA-Z0-9_-]+)', output_text)
-            if match:
-                video_id = match.group(1)
-            else:
-                video_id = output_text.split()[-1]
-            break
-        except subprocess.CalledProcessError as e:
-            stdout_data = e.stdout or ""
-            stderr_data = e.stderr or ""
+            logging.info(f"Lade Thumbnail für Video {video_id} hoch...")
+            thumb_url = f"https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={video_id}"
+            thumb_headers = {"Authorization": f"Bearer {access_token}"}
+            with open(thumb_path, "rb") as tf:
+                res_thumb = requests.post(thumb_url, headers=thumb_headers, files={"media": tf}, timeout=60)
+                if res_thumb.status_code in (200, 201):
+                    logging.info("Thumbnail gesetzt.")
+        except Exception as e:
+            logging.warning(f"Thumbnail-Upload Fehler: {e}")
 
-            # Fallback: Prüfen, ob das Video trotz Exit-Code bereits hochgeladen wurde
-            match = re.search(r'(?:watch\?v=|youtu\.be/)([a-zA-Z0-9_-]+)', stdout_data)
-            if match:
-                video_id = match.group(1)
-                logging.warning(f"Video wurde hochgeladen (ID: {video_id}), aber CLI beendete mit Code {e.returncode}.")
-                break
-
-            logging.warning(f"Upload fehlgeschlagen (Versuch {attempt}/{max_retries}), Exit-Code: {e.returncode}")
-            if stderr_data:
-                logging.warning(f"Fehlerausgabe: {stderr_data.strip()}")
-            
-            if attempt == max_retries:
-                raise
-            
-            wait_time = attempt * 15
-            logging.info(f"Warte {wait_time} Sekunden vor erneutem Versuch...")
-            time.sleep(wait_time)
-
-    # Playlist-Zuweisung nachträglich und robust über den API-Client steuern
+    # 4. Playlist zuweisen
     if playlist_name and video_id:
-        add_video_to_playlist_via_api(video_id, playlist_name)
+        add_video_to_playlist_native(access_token, video_id, playlist_name)
 
     return video_id
 
@@ -542,10 +538,8 @@ def upload_single_video(
 # PROCESS PIPELINE
 # ==========================================
 def process_upload():
-    # Pipeline zur Erkennung, Validierung und Verarbeitung eingehender Videos
     input_path = wait_for_input()
 
-    # Prüfung auf Vollständigkeit und intaktes moov-Atom
     if not is_file_ready_and_valid(input_path):
         logging.warning("Datei noch nicht bereit/valide. Warte 15 Sekunden vor Re-Check...")
         time.sleep(15)
@@ -563,7 +557,6 @@ def process_upload():
     logging.info(f"Verschiebe nach WORK: {input_path} -> {work_path}")
     shutil.move(input_path, work_path)
 
-    # Metadaten und Thumbnail extrahieren
     logging.info("Extrahiere Metadaten & Thumbnail...")
     meta = extract_metadata_and_thumb(work_path)
 
@@ -574,7 +567,7 @@ def process_upload():
     if meta["purl"]:
         description += f"\n\nOriginal-Video-URL: {meta['purl']}"
 
-    tags = DEFAULT_TAGS
+    tags = DEFAULT_TAGS.copy()
     rec_date_flag = None
 
     if meta["date"]:
@@ -583,21 +576,18 @@ def process_upload():
             formatted_date = f"{mdate[:4]}-{mdate[4:6]}-{mdate[6:8]}"
             description += f"\n\nAufnahmedatum: {formatted_date}"
             rec_date_flag = f"{formatted_date}T00:00:00.000Z"
-            tags += f", {formatted_date}, {mdate[:4]}, {mdate}"
+            tags.extend([formatted_date, mdate[:4], mdate])
         else:
             description += f"\n\nDatum: {mdate}"
-            tags += f", {mdate}"
+            tags.append(mdate)
 
-    category = meta["genre"] or DEFAULT_CATEGORY
+    category = meta["genre"] or DEFAULT_CATEGORY_ID
 
-    # Ziel-Playlist ermitteln
     artist_playlist = meta["artist"] if DYNAMIC_PLAYLISTS else None
     target_playlist = artist_playlist or PLAYLIST_NAME
 
-    # Eventuelles Splitting durchführen
     segments = split_video_if_needed(work_path)
 
-    # Alle Segmente der Reihe nach hochladen
     for idx, seg_file in enumerate(segments, start=1):
         final_title = title_base
         if len(segments) > 1:
@@ -617,11 +607,9 @@ def process_upload():
         if len(segments) > 1 and os.path.exists(seg_file):
             os.remove(seg_file)
 
-    # Temporäres Thumbnail aufräumen
     if meta["thumb_path"] and os.path.exists(meta["thumb_path"]):
         os.remove(meta["thumb_path"])
 
-    # Ursprüngliche Datei archivieren oder aufräumen
     if is_symlink:
         if os.path.exists(work_path):
             os.remove(work_path)
@@ -632,9 +620,7 @@ def process_upload():
             shutil.move(work_path, done_path)
             logging.info(f"Datei archiviert nach: {done_path}")
         else:
-            logging.info(
-                "Originaldatei wurde im Rahmen des Splittings verarbeitet und aufgeräumt."
-            )
+            logging.info("Originaldatei wurde im Rahmen des Splittings verarbeitet und aufgeräumt.")
 
     return True
 
@@ -644,7 +630,7 @@ def process_upload():
 # ==========================================
 def main():
     ensure_directories()
-    logging.info("Starte Python Upload Worker Daemon...")
+    logging.info("Starte Python Upload Worker Daemon (Native HTTP)...")
 
     while True:
         try:
