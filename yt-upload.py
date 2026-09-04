@@ -202,6 +202,58 @@ def wait_for_input():
 # ==========================================
 # METADATEN & THUMBNAIL
 # ==========================================
+def get_valid_category_id(category_input):
+    """Mappt Textgenres oder Namen auf offizielle YouTube Category IDs."""
+    if not category_input:
+        return "22" # Standard: People & Blogs
+    
+    # Falls es schon eine reine Ziffer ist (z.B. "20", "22")
+    if str(category_input).isdigit():
+        return str(category_input)
+    
+    # Bekannte Mappings aus Tags/Genres
+    cat_lower = str(category_input).lower()
+    mapping = {
+        "Film & Animation": "1",
+        "Autos & Vehicles": "2",
+        "Music": "10",
+        "Pets & Animals": "15",
+        "Sports": "17",
+        "Short Movies": "18",
+        "Travel & Events": "19",
+        "Gaming": "20",
+        "Videoblogging": "21",
+        "People & Blogs": "22",
+        "Comedy": "23",
+        "Entertainment": "24",
+        "News & Politics": "25",
+        "Howto & Style": "26",
+        "Education": "27",
+        "Science & Technology": "28",
+        "Nonprofits & Activism": "29",
+        "Movies": "30",
+        "Anime/Animation": "31",
+        "Action/Adventure": "32",
+        "Classics": "33",
+        "Documentary": "35",
+        "Drama": "36",
+        "Family": "37",
+        "Foreign": "38",
+        "Horror": "39",
+        "Sci-Fi/Fantasy": "40",
+        "Thriller": "41",
+        "Shorts": "42",
+        "Shows": "43",
+        "Trailers": "44",
+    }
+
+    for key, val in mapping.items():
+        if key in cat_lower:
+            return val
+            
+    return "22" # Fallback-Standard
+
+
 def sanitize_text(text):
     if not text:
         return text
@@ -398,7 +450,7 @@ def upload_single_video(file_path, title, desc, category, tags, rec_date, thumb_
         "snippet": {
             "title": title,
             "description": desc,
-            "categoryId": category,
+            "categoryId": get_valid_category_id(category),
             "tags": [t.strip() for t in tags.split(",")] if tags else [],
             "defaultLanguage": VIDEO_LANGUAGE,
             "defaultAudioLanguage": VIDEO_LANGUAGE,
