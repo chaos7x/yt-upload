@@ -58,32 +58,29 @@ jobs:
             exit 0
           fi
 
-          # 3. Upstream-Hashes für Cache-Check / Vergleich holen
-          CURRENT_YT_HASH=$(git ls-remote https://github.com/tokland/youtube-upload.git HEAD 2>/dev/null | cut -f1 || echo "master")
+          # 3. Upstream-Hashes für Cache-Check holen (ohne das alte tokland-Repo)
           DEBIAN_DIGEST=$(docker manifest inspect debian:trixie-slim 2>/dev/null | grep -m 1 "digest" | awk -F '"' '{print $4}' || echo "")
           FFMPEG_DIGEST=$(docker manifest inspect mwader/static-ffmpeg:7.1 2>/dev/null | grep -m 1 "digest" | awk -F '"' '{print $4}' || echo "")
 
-          # Kombinierten Fingerprint aller Quellen erstellen
-          CURRENT_FINGERPRINT=$(echo "${HEAD_COMMIT}:${CURRENT_YT_HASH}:${DEBIAN_DIGEST}:${FFMPEG_DIGEST}" | sha256sum | awk '{print $1}')
+          # Kombinierten Fingerprint aller relevanten Quellen erstellen
+          CURRENT_FINGERPRINT=$(echo "${HEAD_COMMIT}:${DEBIAN_DIGEST}:${FFMPEG_DIGEST}" | sha256sum | awk '{print $1}')
           echo "Aktueller System-Fingerprint: $CURRENT_FINGERPRINT"
 
           # 4. Bei Cronjob prüfen, ob sich der Fingerprint seit dem letzten Release geändert hat
           SKIP_BUILD="false"
           if [ "${{ github.event_name }}" = "schedule" ] && [ -n "$LATEST_TAG" ]; then
-            # Holen des Fingerprints aus dem letzten GitHub Release Body
             LAST_RELEASE_BODY=$(gh release view "$LATEST_TAG" --json body -q ".body" 2>/dev/null || echo "")
             LAST_FINGERPRINT=$(echo "$LAST_RELEASE_BODY" | grep -o 'Fingerprint: [a-f0-9]*' | awk '{print $2}' || echo "")
 
             echo "Letzter Release-Fingerprint: $LAST_FINGERPRINT"
 
             if [ -n "$LAST_FINGERPRINT" ] && [ "$CURRENT_FINGERPRINT" = "$LAST_FINGERPRINT" ]; then
-              echo "Keine Änderungen in eigenem Code oder Upstream-Quellen (Debian/FFmpeg/yt-upload). Abbruch."
-              SKIP_BUILD="true"
+              echo "Keine Änderungen in eigenem Code oder Upstream-Quellen (Debian/FFmpeg). Abbruch."
+              echo "skip_build=true" >> $GITHUB_OUTPUT
             fi
           fi
 
           if [ "$SKIP_BUILD" = "true" ]; then
-            echo "skip_build=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -103,7 +100,6 @@ jobs:
           echo "Bauen mit Ziel-Version: $TARGET_VERSION"
           echo "version=$TARGET_VERSION" >> $GITHUB_OUTPUT
           echo "fingerprint=$CURRENT_FINGERPRINT" >> $GITHUB_OUTPUT
-          echo "yt_hash=$CURRENT_YT_HASH" >> $GITHUB_OUTPUT
           echo "skip_build=false" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -148,7 +144,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.bump_version.outputs.version }}
-            YT_UPLOAD_REF=${{ steps.bump_version.outputs.yt_hash }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
