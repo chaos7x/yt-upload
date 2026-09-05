@@ -625,7 +625,7 @@ def upload_single_video(
     default_audio_lang=VIDEO_LANGUAGE,
     embeddable=ALLOW_EMBEDDING,
     cred_file=None,
-    chunksize=104857600,
+    chunksize=268435456,
     open_link=False
 ):
     logging.info(f"Lade hoch via native HTTP REST API ({privacy}): {os.path.basename(file_path)}")
@@ -1017,7 +1017,7 @@ def parse_args():
     parser.add_argument("--client-secrets", type=str, help="Path to client secrets JSON file")
     # default=None sorgt dafür, dass --client-secrets korrekt als Fallback greift
     parser.add_argument("--credentials-file", type=str, default=None, help="Path to credentials storage JSON file")
-    parser.add_argument("--chunksize", type=int, default=104857600, help="Upload file chunksize in bytes (default: 100MB)")
+    parser.add_argument("--chunksize", type=int, default=268435456, help="Upload file chunksize in bytes (default: 256MB)")
     parser.add_argument("--open-link", action="store_true", help="Open video URL in web browser after upload completes")
 
     args = parser.parse_args()
