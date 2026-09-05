@@ -9,7 +9,8 @@ app/
 *.sav
 *.bak
 *.new
-
+*.log
+*.diff
 # Python Bytecode und Cache ausschließen
 __pycache__/
 *.pyc
