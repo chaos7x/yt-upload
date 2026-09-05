@@ -725,14 +725,6 @@ def upload_single_video(
                 try:
                     put_res = requests.put(upload_url, headers=chunk_headers, data=chunk, timeout=120)
 
-                    # Quota-Check: Falls Quota erschöpft ist, pausieren oder beenden
-                    if put_res.status_code == 403:
-                        resp_json = put_res.json()
-                        if "quotaExceeded" in str(resp_json):
-                            logging.critical("YouTube API Quota erschöpft! Stoppe Verarbeitung.")
-                            # Im Daemon-Modus könnte man hier 1h schlafen, im CLI-Modus ist Beenden besser.
-                            sys.exit(1)
-
                     if put_res.status_code in (200, 201):
                         resp_data = put_res.json()
                         video_id = resp_data.get("id")
