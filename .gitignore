@@ -5,6 +5,9 @@ oauth/
 tests/
 app/
 
+#Github Zeug
+.github/agents/
+
 # Backup- und Sicherungsdateien ausschließen
 *.sav
 *.bak
@@ -17,3 +20,4 @@ __pycache__/
 docker-compose.override.yaml
 # Environminet Datei ausschließen
 .env
+
