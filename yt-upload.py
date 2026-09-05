@@ -31,6 +31,7 @@ __version__ = "2.0.0"
 
 import argparse
 import configparser
+import glob
 import json
 import logging
 import os
@@ -122,7 +123,7 @@ DYNAMIC_PLAYLISTS = os.getenv(
 # ==========================================
 # OAUTH TOKEN HELPER
 # ==========================================
-def get_access_token(cred_file=None):
+def get_access_token(cred_file=None, client_secrets_file=None):
     """Liest den Refresh Token aus der JSON-Datei und holt ein frisches Access Token via Google OAuth API."""
     target_cred = cred_file or CREDENTIALS_FILE
     if not os.path.exists(target_cred):
@@ -132,8 +133,13 @@ def get_access_token(cred_file=None):
         data = json.load(f)
 
     # Unterstützung für verschiedene OAuth-JSON-Strukturen (Google Client Secrets vs Token Files)
-    client_id = data.get("client_id") or data.get("installed", {}).get("client_id") or data.get("web", {}).get("client_id")
-    client_secret = data.get("client_secret") or data.get("installed", {}).get("client_secret") or data.get("web", {}).get("client_secret")
+    client_data = data
+    if client_secrets_file:
+        with open(client_secrets_file, "r", encoding="utf-8") as f:
+            client_data = json.load(f)
+
+    client_id = client_data.get("client_id") or client_data.get("installed", {}).get("client_id") or client_data.get("web", {}).get("client_id")
+    client_secret = client_data.get("client_secret") or client_data.get("installed", {}).get("client_secret") or client_data.get("web", {}).get("client_secret")
     refresh_token = data.get("refresh_token")
 
     if not all([client_id, client_secret, refresh_token]):
@@ -163,6 +169,20 @@ def ensure_directories():
             os.makedirs(d, exist_ok=True)
         except (PermissionError, OSError) as e:
             sys.stderr.write(f"Warnung: Kann Verzeichnis {d} nicht anlegen ({e}).\n")
+
+
+def unique_path(directory, filename):
+    candidate = os.path.join(directory, filename)
+    if not os.path.lexists(candidate):
+        return candidate
+
+    stem, extension = os.path.splitext(filename)
+    counter = 1
+    while True:
+        candidate = os.path.join(directory, f"{stem}_{counter}{extension}")
+        if not os.path.lexists(candidate):
+            return candidate
+        counter += 1
 
 
 def cleanup_work_dir():
@@ -261,7 +281,7 @@ def wait_for_input(target_dir=IN_DIR):
             if existing:
                 return existing
 
-    i = inotify.adapters.InotifyTree(target_dir)
+    i = inotify.adapters.InotifyTree(target_dir) # type: ignore
 
     while True:
         try:
@@ -411,7 +431,7 @@ def extract_metadata_and_thumb(file_path):
     pid = os.getpid()
     timestamp = int(time.time() * 1000)
     thumb_path = os.path.join(temp_dir, f"yt_thumb_{pid}_{timestamp}.jpg")
-    temp_attach = os.path.join(temp_dir, f"yt_attach_{pid}_{timestamp}")
+    temp_attach = os.path.join(temp_dir, f"yt_attach_{pid}_{timestamp}.jpg")
 
     try:
         # 1. Versuch: In der Datei eingebettetes Cover/Attachment extrahieren (z.B. MKV/MP4)
@@ -419,7 +439,10 @@ def extract_metadata_and_thumb(file_path):
         subprocess.run(cmd_mkv, capture_output=True, text=True)
 
         if not os.path.exists(temp_attach) or os.path.getsize(temp_attach) == 0:
-            cmd_mp4 = ["ffmpeg", "-y", "-i", file_path, "-map", "0:v", "-map", "-0:V", "-c", "copy", temp_attach]
+            cmd_mp4 = [
+                "ffmpeg", "-y", "-i", file_path,
+                "-map", "0:v:m:attached_pic:0?", "-c", "copy", temp_attach
+            ]
             subprocess.run(cmd_mp4, capture_output=True, text=True)
 
         if os.path.exists(temp_attach) and os.path.getsize(temp_attach) > 0:
@@ -518,6 +541,12 @@ def split_video_if_needed(work_path):
     base_name, ext = os.path.splitext(filename)
     segment_pattern = os.path.join(WORK_DIR, f"{base_name}_part%02d{ext}")
 
+    for stale_segment in glob.glob(os.path.join(WORK_DIR, f"{base_name}_part[0-9][0-9]{ext}")):
+        try:
+            os.remove(stale_segment)
+        except OSError as e:
+            raise RuntimeError(f"Altes Segment kann nicht gelöscht werden: {stale_segment}") from e
+
     cmd_split = [
         "ffmpeg", "-y", "-i", work_path, "-c", "copy", "-map", "0",
         "-avoid_negative_ts", "make_zero", "-f", "segment",
@@ -532,7 +561,7 @@ def split_video_if_needed(work_path):
         raise
 
     created_segments = []
-    part_idx = 1
+    part_idx = 0
     while True:
         seg_candidate = os.path.join(WORK_DIR, f"{base_name}_part{part_idx:02d}{ext}")
         if os.path.exists(seg_candidate):
@@ -540,6 +569,9 @@ def split_video_if_needed(work_path):
             part_idx += 1
         else:
             break
+
+    if not created_segments:
+        raise RuntimeError("FFmpeg hat keine Videosegmente erzeugt.")
 
     return created_segments
 
@@ -625,6 +657,7 @@ def upload_single_video(
     default_audio_lang=VIDEO_LANGUAGE,
     embeddable=ALLOW_EMBEDDING,
     cred_file=None,
+    client_secrets_file=None,
     chunksize=268435456,
     open_link=False
 ):
@@ -642,7 +675,7 @@ def upload_single_video(
     logging.info(f"Lade hoch via native HTTP REST API ({privacy}): {os.path.basename(file_path)}")
 
     file_size = os.path.getsize(file_path)
-    access_token = get_access_token(cred_file)
+    access_token = get_access_token(cred_file, client_secrets_file)
 
     # Session für Verbindungs-Wiederverwendung (Performance)
     session = requests.Session()
@@ -767,6 +800,11 @@ def upload_single_video(
                         chunk_success = True
                         break
 
+                    elif put_res.status_code in (401, 403):
+                        access_token = get_access_token(cred_file, client_secrets_file)
+                        chunk_headers["Authorization"] = f"Bearer {access_token}"
+                        raise ConnectionError(f"Authentifizierung beim Chunk-Upload fehlgeschlagen ({put_res.status_code})")
+
                     elif put_res.status_code >= 500:
                         logging.warning(f"YouTube Server Fehler ({put_res.status_code}). Retry...")
                         raise ConnectionError(f"Server Side Error {put_res.status_code}")
@@ -786,7 +824,8 @@ def upload_single_video(
 
                     # Token erneuern
                     try:
-                        access_token = get_access_token(cred_file)
+                        access_token = get_access_token(cred_file, client_secrets_file)
+                        chunk_headers["Authorization"] = f"Bearer {access_token}"
                     except Exception as tok_err:
                         logging.warning(f"Konnte Token nicht auffrischen: {tok_err}")
 
@@ -866,12 +905,12 @@ def process_upload(args, target_dir=IN_DIR):
 
     if not is_ready:
         logging.error(f"Datei unvollständig oder beschädigt. Verschiebe nach corrupt: {input_path}")
-        shutil.move(input_path, os.path.join(CORRUPT_DIR, os.path.basename(input_path)))
+        shutil.move(input_path, unique_path(CORRUPT_DIR, os.path.basename(input_path)))
         return False
 
     is_symlink = os.path.islink(input_path)
     filename = os.path.basename(input_path)
-    work_path = os.path.join(WORK_DIR, filename)
+    work_path = unique_path(WORK_DIR, filename)
 
     logging.info(f"Verschiebe nach WORK: {input_path} -> {work_path}")
     shutil.move(input_path, work_path)
@@ -907,7 +946,7 @@ def process_upload(args, target_dir=IN_DIR):
     category = args.category or meta["genre"] or DEFAULT_CATEGORY
     target_playlist = args.playlist or (meta["artist"] if DYNAMIC_PLAYLISTS else None) or PLAYLIST_NAME
     thumb_path = args.thumbnail or meta["thumb_path"]
-    cred_path = args.credentials_file or args.client_secrets or CREDENTIALS_FILE
+    cred_path = args.credentials_file or CREDENTIALS_FILE
 
     segments = split_video_if_needed(work_path)
     is_split = len(segments) > 1
@@ -936,6 +975,7 @@ def process_upload(args, target_dir=IN_DIR):
                 default_audio_lang=args.default_audio_language,
                 embeddable=args.embeddable,
                 cred_file=cred_path,
+                client_secrets_file=args.client_secrets,
                 chunksize=args.chunksize,
                 open_link=args.open_link
             )
@@ -960,7 +1000,7 @@ def process_upload(args, target_dir=IN_DIR):
                 os.remove(work_path)
         else:
             if os.path.exists(work_path):
-                done_path = os.path.join(DONE_DIR, filename)
+                done_path = unique_path(DONE_DIR, filename)
                 shutil.move(work_path, done_path)
                 logging.info(f"Datei erfolgreich archiviert nach: {done_path}")
 
@@ -1039,7 +1079,6 @@ def parse_args():
     )
 
     parser.add_argument("--client-secrets", type=str, help="Path to client secrets JSON file")
-    # default=None sorgt dafür, dass --client-secrets korrekt als Fallback greift
     parser.add_argument("--credentials-file", type=str, default=None, help="Path to credentials storage JSON file")
     parser.add_argument("--chunksize", type=int, default=268435456, help="Upload file chunksize in bytes (default: 256MB)")
     parser.add_argument("--open-link", action="store_true", help="Open video URL in web browser after upload completes")
@@ -1083,19 +1122,18 @@ def main():
     if is_service_mode:
         ensure_directories()
 
-    cred_path = args.credentials_file or args.client_secrets or CREDENTIALS_FILE
+    cred_path = args.credentials_file or CREDENTIALS_FILE
 
     # --- MODUS 1: DAEMON MODUS (-D) ---
     if args.daemon:
         target_dir = args.auto if isinstance(args.auto, str) else IN_DIR
         logging.info(f"Starte Python Upload Worker Daemon auf Verzeichnis: {target_dir}...")
-        cleanup_work_dir()
         while True:
             try:
                 process_upload(args, target_dir=target_dir)
             except Exception as e:
                 logging.error(f"Fehler bei Verarbeitung im Daemon Mode: {e}", exc_info=True)
-                cleanup_work_dir()
+                logging.warning("WORK-Verzeichnis bleibt zur manuellen Wiederaufnahme erhalten.")
                 time.sleep(10)
 
     # --- MODUS 2: AUTOMATISCHER BATCH-RUN (-a / --auto) ---
@@ -1111,7 +1149,7 @@ def main():
                 process_upload(args, target_dir=target_path)
             except Exception as e:
                 logging.error(f"Fehler bei Batch-Verarbeitung von {found}: {e}", exc_info=True)
-                cleanup_work_dir()
+                logging.warning("WORK-Verzeichnis bleibt zur manuellen Wiederaufnahme erhalten.")
                 break
 
     # --- MODUS 3: MANUELLER CLI-UPLOAD ---
@@ -1156,6 +1194,7 @@ def main():
                 default_audio_lang=args.default_audio_language,
                 embeddable=args.embeddable,
                 cred_file=cred_path,
+                client_secrets_file=args.client_secrets,
                 chunksize=args.chunksize,
                 open_link=args.open_link
             )
