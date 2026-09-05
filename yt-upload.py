@@ -628,10 +628,24 @@ def upload_single_video(
     chunksize=268435456,
     open_link=False
 ):
+    # YouTube API Limits einhalten (Titel max 100, Beschreibung max 5000 Zeichen)
+    if title:
+        title = title[:100]
+    if desc:
+        desc = desc[:5000]
+
+    # Wenn ein Veröffentlichungszeitpunkt gesetzt ist, muss der Status 'private' sein
+    if publish_at and privacy != "private":
+        logging.info(f"Status wurde für geplanten Upload von '{privacy}' auf 'private' korrigiert.")
+        privacy = "private"
+
     logging.info(f"Lade hoch via native HTTP REST API ({privacy}): {os.path.basename(file_path)}")
 
     file_size = os.path.getsize(file_path)
     access_token = get_access_token(cred_file)
+
+    # Session für Verbindungs-Wiederverwendung (Performance)
+    session = requests.Session()
 
     # Chunksize muss ein Vielfaches von 256 KiB sein
     if chunksize % CHUNK_UNIT_BYTES != 0:
@@ -691,7 +705,8 @@ def upload_single_video(
     }
 
     logging.info("Initialisiere Resumable Upload Session...")
-    init_res = requests.post(init_url, headers=init_headers, json=metadata_body, timeout=60)
+
+    init_res = session.post(init_url, headers=init_headers, json=metadata_body, timeout=60)
     if init_res.status_code != 200:
         raise RuntimeError(f"Session-Init fehlgeschlagen ({init_res.status_code}): {init_res.text}")
 
@@ -723,7 +738,8 @@ def upload_single_video(
             chunk_success = False
             for attempt in range(1, max_retries + 1):
                 try:
-                    put_res = requests.put(upload_url, headers=chunk_headers, data=chunk, timeout=120)
+
+                    put_res = session.put(upload_url, headers=chunk_headers, data=chunk, timeout=120)
 
                     if put_res.status_code in (200, 201):
                         resp_data = put_res.json()
@@ -780,7 +796,8 @@ def upload_single_video(
                             "Authorization": f"Bearer {access_token}",
                             "Content-Range": f"bytes */{file_size}"
                         }
-                        status_res = requests.put(upload_url, headers=status_headers, timeout=30)
+
+                        status_res = session.put(upload_url, headers=status_headers, timeout=30)
                         if status_res.status_code == 308:
                             range_hdr = status_res.headers.get("Range")
                             if range_hdr and "-" in range_hdr:
@@ -809,7 +826,8 @@ def upload_single_video(
                 "Content-Type": "image/jpeg"
             }
             with open(thumb_path, "rb") as tf:
-                thumb_res = requests.post(thumb_url, headers=thumb_headers, data=tf.read(), timeout=60)
+
+                thumb_res = session.post(thumb_url, headers=thumb_headers, data=tf.read(), timeout=60)
                 if thumb_res.status_code == 200:
                     logging.info("Thumbnail gesetzt.")
                 else:
