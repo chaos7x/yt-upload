@@ -30,6 +30,7 @@ __title__ = "YouTube Video Uploader & Auto-Archiver"
 __version__ = "2.0.0"
 
 import argparse
+import configparser
 import json
 import logging
 import os
@@ -38,10 +39,11 @@ import shutil
 import subprocess
 import sys
 import time
-import webbrowser
 import unicodedata
+import webbrowser
 import requests
-import configparser
+import random
+
 
 if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
     os.environ['DEBUG'] = '1'
@@ -53,20 +55,22 @@ try:
     HAS_INOTIFY = True
 except ImportError:
     inotify = None
-    HAS_INOTIFY = False  # Typo korrigiert
+    HAS_INOTIFY = False
 
 # ==========================================
 # KONFIGURATION & PATHS
 # ==========================================
-# 1. Standard-Fallbacks (Docker / Bare-Metal Defaults)
 CONF_PATH = os.environ.get('CONFIG_FILE', '/etc/yt-upload/upload.conf')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-IN_DIR = "/videos/in"
-WORK_DIR = "/videos/work"
-DONE_DIR = "/videos/done"
-CORRUPT_DIR = "/videos/corrupt"
-LOG_FILE = "/log/upload.log"
-CREDENTIALS_FILE = "/app/oauth/youtube-upload-credentials.json"
+# 1. Standard-Fallbacks (Docker vs. Bare-Metal Host)
+IN_DIR = os.environ.get('IN_DIR', "/videos/in" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "in"))
+WORK_DIR = os.environ.get('WORK_DIR', "/videos/work" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "work"))
+DONE_DIR = os.environ.get('DONE_DIR', "/videos/done" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "done"))
+CORRUPT_DIR = os.environ.get('CORRUPT_DIR', "/videos/corrupt" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "corrupt"))
+
+LOG_FILE = os.environ.get('LOG_FILE', "/log/upload.log" if os.path.exists("/log") else os.path.join(BASE_DIR, "upload.log"))
+CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', "/app/oauth/youtube-upload-credentials.json" if os.path.exists("/app/oauth") else os.path.join(BASE_DIR, "youtube-upload-credentials.json"))
 
 SEGMENT_TIME_SEC = 36000  # 10 Stunden Limit (in Sekunden)
 
@@ -103,7 +107,7 @@ if os.path.isfile(CONF_PATH):
 
 # 3. Dynamic Playlists (Env Var überschreibt Config, falls gesetzt)
 DYNAMIC_PLAYLISTS = os.getenv(
-    "ENABLE_DYNAMIC_PLAYLISTS", 
+    "ENABLE_DYNAMIC_PLAYLISTS",
     str(config.getboolean('settings', 'enable_dynamic_playlists', fallback=False) if os.path.isfile(CONF_PATH) else "false")
 ).lower() in ("1", "true", "yes")
 
@@ -214,7 +218,7 @@ def wait_for_input(target_dir=IN_DIR):
 
     logging.info(f"Warte via inotify auf neue Dateien in {target_dir}...")
     valid_exts = (".mp4", ".mkv", ".mov", ".m4v")
-    
+
     if not HAS_INOTIFY:
         logging.warning("inotify-Modul nicht verfügbar, nutze Polling-Fallback.")
         while True:
@@ -328,6 +332,56 @@ def parse_location(location_str):
         return None
 
 
+def generate_auto_thumbnail(video_path, output_path, min_sec=15, max_sec=120):
+    """Generiert ein Thumbnail aus einem definierten Zeitfenster (min_sec bis max_sec)."""
+    if not os.path.exists(video_path):
+        return None
+
+    # 1. Videodauer via ffprobe ermitteln
+    try:
+        cmd_probe = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            video_path
+        ]
+        res = subprocess.run(cmd_probe, capture_output=True, text=True, check=True)
+        duration = float(res.stdout.strip())
+    except Exception as e:
+        logging.warning(f"Konnte Videodauer für Auto-Thumbnail nicht ermitteln ({e}), nutze Fallback.")
+        duration = 0.0
+
+    # 2. Zielsekunde im Bereich [min_sec, max_sec] berechnen
+    if duration > 0:
+        actual_max = min(int(duration - 1), max_sec)
+        actual_min = min(min_sec, actual_max)
+        target_sec = random.randint(actual_min, actual_max) if actual_min < actual_max else actual_min
+    else:
+        target_sec = min_sec
+
+    logging.info(f"Generiere automatisches Thumbnail bei Sekunde {target_sec}...")
+
+    # 3. Frame mit FFmpeg als Thumbnail extrahieren (1280px Breite für YouTube)
+    cmd_thumb = [
+        "ffmpeg", "-y",
+        "-ss", str(target_sec),
+        "-i", video_path,
+        "-vframes", "1",
+        "-vf", "scale=1280:-1",
+        "-q:v", "2",
+        output_path
+    ]
+
+    try:
+        subprocess.run(cmd_thumb, capture_output=True, text=True, check=True)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return output_path
+    except Exception as e:
+        logging.warning(f"Fehler bei automatischer Thumbnail-Generierung: {e}")
+
+    return None
+
+
 def extract_metadata_and_thumb(file_path):
     metadata = {
         "title": None,
@@ -393,8 +447,13 @@ def extract_metadata_and_thumb(file_path):
                 os.remove(temp_attach)
 
         if not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0:
-            cmd_frame = ["ffmpeg", "-y", "-ss", "00:00:01", "-i", file_path, "-vframes", "1", "-q:v", "2", thumb_path]
-            subprocess.run(cmd_frame, capture_output=True, text=True)
+            # Werte aus upload.conf / ConfigParser auslesen
+            auto_gen = config.getboolean('settings', 'auto_generate_thumbnail', fallback=True) if 'settings' in config else True
+            min_sec = config.getint('settings', 'auto_thumb_min_sec', fallback=15) if 'settings' in config else 15
+            max_sec = config.getint('settings', 'auto_thumb_max_sec', fallback=120) if 'settings' in config else 120
+
+            if auto_gen:
+                generate_auto_thumbnail(file_path, thumb_path, min_sec=min_sec, max_sec=max_sec)
 
         if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
             metadata["thumb_path"] = thumb_path
@@ -774,7 +833,7 @@ def process_upload(args, target_dir=IN_DIR):
 # ==========================================
 def parse_args():
     parser = argparse.ArgumentParser(
-    description=f"{__title__} v{__version__} (YouTube Data API v3)"
+        description=f"{__title__} v{__version__} (YouTube Data API v3)"
     )
 
     # Version Parameter hinzufügen
@@ -843,9 +902,10 @@ def parse_args():
 
     return args
 
+
 def setup_logging(log_file, log_to_file=True):
     handlers = [logging.StreamHandler(sys.stdout)]
-    
+
     if log_to_file and log_file:
         try:
             os.makedirs(os.path.dirname(log_file), exist_ok=True)
@@ -859,6 +919,7 @@ def setup_logging(log_file, log_to_file=True):
         handlers=handlers,
         force=True
     )
+
 
 def main():
     args = parse_args()
@@ -875,8 +936,9 @@ def main():
 
     # --- MODUS 1: DAEMON MODUS (-D) ---
     if args.daemon:
-        target_dir = args.auto if args.auto else IN_DIR
+        target_dir = args.auto if isinstance(args.auto, str) else IN_DIR
         logging.info(f"Starte Python Upload Worker Daemon auf Verzeichnis: {target_dir}...")
+        cleanup_work_dir()
         while True:
             try:
                 process_upload(args, target_dir=target_dir)
@@ -887,7 +949,7 @@ def main():
 
     # --- MODUS 2: AUTOMATISCHER BATCH-RUN (-a / --auto) ---
     elif args.auto:
-        target_path = args.auto
+        target_path = args.auto if isinstance(args.auto, str) else IN_DIR
         logging.info(f"Starte automatischen Batch-Upload für Ordner: {target_path}")
         while True:
             found = find_existing_video(target_path)
@@ -917,7 +979,7 @@ def main():
                 continue
 
             file_base = os.path.splitext(os.path.basename(file_path))[0]
-            
+
             if args.title:
                 if total_files > 1:
                     title = args.title_template.format(title=args.title, n=idx, total=total_files)

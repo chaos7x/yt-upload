@@ -14,3 +14,6 @@ default_language = de
 allow_embedding = true
 default_description = Automatischer Upload via Script.
 default_tags = Upload, Video
+auto_generate_thumbnail = true
+auto_thumb_min_sec = 15
+auto_thumb_max_sec = 120
