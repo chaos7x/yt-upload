@@ -87,6 +87,8 @@ PLAYLIST_NAME = ""
 AUTO_GENERATE_THUMBNAIL = True
 AUTO_THUMB_MIN_SEC = 15
 AUTO_THUMB_MAX_SEC = 120
+ALLOW_OVERWRITE = True
+
 
 # 2. Config-Datei einlesen (falls vorhanden)
 config = configparser.ConfigParser()
@@ -112,6 +114,7 @@ if os.path.isfile(CONF_PATH):
         AUTO_GENERATE_THUMBNAIL = config.getboolean('settings', 'auto_generate_thumbnail', fallback=AUTO_GENERATE_THUMBNAIL)
         AUTO_THUMB_MIN_SEC = config.getint('settings', 'auto_thumb_min_sec', fallback=AUTO_THUMB_MIN_SEC)
         AUTO_THUMB_MAX_SEC = config.getint('settings', 'auto_thumb_max_sec', fallback=AUTO_THUMB_MAX_SEC)
+        ALLOW_OVERWRITE = config.getboolean('settings', 'allow_overwrite', fallback=ALLOW_OVERWRITE)
 
 # 3. Dynamic Playlists (Env Var überschreibt Config, falls gesetzt)
 DYNAMIC_PLAYLISTS = os.getenv(
@@ -183,6 +186,13 @@ def unique_path(directory, filename):
         if not os.path.lexists(candidate):
             return candidate
         counter += 1
+
+
+def resolve_target_path(directory, filename):
+    candidate = os.path.join(directory, filename)
+    if ALLOW_OVERWRITE:
+        return candidate
+    return unique_path(directory, filename)
 
 
 def cleanup_work_dir():
@@ -908,12 +918,14 @@ def process_upload(args, target_dir=IN_DIR):
 
     if not is_ready:
         logging.error(f"Datei unvollständig oder beschädigt. Verschiebe nach corrupt: {input_path}")
-        shutil.move(input_path, unique_path(CORRUPT_DIR, os.path.basename(input_path)))
+        shutil.move(input_path, resolve_target_path(CORRUPT_DIR, os.path.basename(input_path)))
         return False
 
     is_symlink = os.path.islink(input_path)
     filename = os.path.basename(input_path)
-    work_path = unique_path(WORK_DIR, filename)
+
+    # Für Work- und Done-Verzeichnisse:
+    work_path = resolve_target_path(WORK_DIR, filename)
 
     logging.info(f"Verschiebe nach WORK: {input_path} -> {work_path}")
     shutil.move(input_path, work_path)
@@ -1003,7 +1015,7 @@ def process_upload(args, target_dir=IN_DIR):
                 os.remove(work_path)
         else:
             if os.path.exists(work_path):
-                done_path = unique_path(DONE_DIR, filename)
+                done_path = resolve_target_path(DONE_DIR, filename)
                 shutil.move(work_path, done_path)
                 logging.info(f"Datei erfolgreich archiviert nach: {done_path}")
 
