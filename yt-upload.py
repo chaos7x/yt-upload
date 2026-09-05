@@ -15,7 +15,7 @@
 # ==============================================================================
 
 """
-Automatischer YouTube Upload Worker & CLI Uploader (Native REST API v2.0.0).
+Automatischer YouTube Video Uploader & CLI-Uploader v2.0.0 (YouTube Data API v3)
 Bietet drei Betriebsmodi:
 1. Manuell (CLI): Upload einzelner Dateien wie mit dem klassischen youtube-upload.
 2. Auto-Pipeline (-a --auto): Einmalige Batch-Verarbeitung eines Zielverzeichnisses mit FFmpeg-Splitting & Metadatenvererbung.
@@ -26,7 +26,7 @@ SYSTEM-VORAUSSETZUNGEN:
 - python3-inotify (optional, aber empfohlen für den -D Dämon-Modus ohne Polling-Overhead)
 """
 
-__title__ = "YouTube Video Uploader & Auto-Archiver"
+__title__ = "YouTube Video Uploader & CLI-Uploder"
 __version__ = "2.0.0"
 
 import argparse
@@ -38,12 +38,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 import webbrowser
 import requests
-import random
-
 
 if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
     os.environ['DEBUG'] = '1'
@@ -73,6 +72,7 @@ LOG_FILE = os.environ.get('LOG_FILE', "/log/upload.log" if os.path.exists("/log"
 CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', "/app/oauth/youtube-upload-credentials.json" if os.path.exists("/app/oauth") else os.path.join(BASE_DIR, "youtube-upload-credentials.json"))
 
 SEGMENT_TIME_SEC = 36000  # 10 Stunden Limit (in Sekunden)
+CHUNK_UNIT_BYTES = 262144  # YouTube Resumable Upload Chunks müssen Vielfache von 256 KiB sein
 
 DEFAULT_DESCRIPTION = "Automatischer Upload via Script."
 DEFAULT_TAGS = "Upload, Video"
@@ -82,6 +82,10 @@ VIDEO_PRIVACY = "unlisted"  # 'public', 'private', 'unlisted'
 VIDEO_LANGUAGE = "de"
 ALLOW_EMBEDDING = True
 PLAYLIST_NAME = ""
+
+AUTO_GENERATE_THUMBNAIL = True
+AUTO_THUMB_MIN_SEC = 15
+AUTO_THUMB_MAX_SEC = 120
 
 # 2. Config-Datei einlesen (falls vorhanden)
 config = configparser.ConfigParser()
@@ -104,6 +108,9 @@ if os.path.isfile(CONF_PATH):
         VIDEO_LANGUAGE = config.get('settings', 'default_language', fallback=VIDEO_LANGUAGE)
         ALLOW_EMBEDDING = config.getboolean('settings', 'allow_embedding', fallback=ALLOW_EMBEDDING)
         PLAYLIST_NAME = config.get('settings', 'playlist_name', fallback=PLAYLIST_NAME)
+        AUTO_GENERATE_THUMBNAIL = config.getboolean('settings', 'auto_generate_thumbnail', fallback=AUTO_GENERATE_THUMBNAIL)
+        AUTO_THUMB_MIN_SEC = config.getint('settings', 'auto_thumb_min_sec', fallback=AUTO_THUMB_MIN_SEC)
+        AUTO_THUMB_MAX_SEC = config.getint('settings', 'auto_thumb_max_sec', fallback=AUTO_THUMB_MAX_SEC)
 
 # 3. Dynamic Playlists (Env Var überschreibt Config, falls gesetzt)
 DYNAMIC_PLAYLISTS = os.getenv(
@@ -124,7 +131,7 @@ def get_access_token(cred_file=None):
     with open(target_cred, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # Unterstützung für verschiedene OAuth-JSON Strukturen (Google Client Secrets vs Token Files)
+    # Unterstützung für verschiedene OAuth-JSON-Strukturen (Google Client Secrets vs Token Files)
     client_id = data.get("client_id") or data.get("installed", {}).get("client_id") or data.get("web", {}).get("client_id")
     client_secret = data.get("client_secret") or data.get("installed", {}).get("client_secret") or data.get("web", {}).get("client_secret")
     refresh_token = data.get("refresh_token")
@@ -140,7 +147,7 @@ def get_access_token(cred_file=None):
         "grant_type": "refresh_token",
     }
 
-    res = requests.post(token_url, data=payload)
+    res = requests.post(token_url, data=payload, timeout=30)
     if res.status_code != 200:
         raise RuntimeError(f"Fehler beim Erneuern des Access Tokens: {res.text}")
 
@@ -157,6 +164,7 @@ def ensure_directories():
         except (PermissionError, OSError) as e:
             sys.stderr.write(f"Warnung: Kann Verzeichnis {d} nicht anlegen ({e}).\n")
 
+
 def cleanup_work_dir():
     logging.warning("Bereinige WORK-Verzeichnis...")
     if os.path.exists(WORK_DIR):
@@ -171,18 +179,42 @@ def cleanup_work_dir():
                 logging.error(f"Fehler beim Löschen von {item_path}: {e}")
 
 
-def is_file_ready_and_valid(file_path):
-    try:
-        initial_size = os.path.getsize(file_path)
-        time.sleep(2)
-        current_size = os.path.getsize(file_path)
-        if initial_size != current_size or current_size == 0:
-            logging.warning(f"Datei wird eventuell noch geschrieben: {os.path.basename(file_path)}")
-            return False
-    except Exception as e:
-        logging.error(f"Fehler bei Dateigrößenprüfung von {file_path}: {e}")
+def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
+    """
+    Prüft, ob eine Datei vollständig geschrieben wurde (z.B. bei laufendem Kopiervorgang)
+    und ob der Container (moov-Atom) valide ist.
+    """
+    if not os.path.exists(file_path):
         return False
 
+    # 1. Prüfen, ob die Dateigröße sich noch ändert (Kopiervorgang im Gange)
+    last_size = -1
+    for check_num in range(max_checks):
+        try:
+            current_size = os.path.getsize(file_path)
+        except OSError as e:
+            logging.error(f"Fehler bei Dateigrößenprüfung von {file_path}: {e}")
+            return False
+
+        if current_size == 0:
+            logging.warning(f"Datei ist noch 0 Bytes groß, warte... ({check_num + 1}/{max_checks})")
+            time.sleep(wait_interval)
+            continue
+
+        if last_size != -1 and current_size == last_size:
+            # Größe stabil
+            break
+        elif last_size != -1:
+            logging.info(f"Datei wächst noch ({current_size / (1024*1024):.1f} MB)... warte weiter.")
+
+        last_size = current_size
+        time.sleep(wait_interval)
+    else:
+        # Größe hat sich kontinuierlich geändert oder war 0
+        logging.warning(f"Datei wird nach {max_checks * wait_interval}s noch geschrieben: {os.path.basename(file_path)}")
+        return False
+
+    # 2. FFprobe-Integritätscheck
     cmd_check = [
         "ffprobe",
         "-v", "error",
@@ -192,7 +224,7 @@ def is_file_ready_and_valid(file_path):
     ]
     res = subprocess.run(cmd_check, capture_output=True, text=True)
     if res.returncode != 0:
-        logging.warning(f"FFprobe-Check fehlgeschlagen (moov-Atom fehlt): {os.path.basename(file_path)}")
+        logging.warning(f"FFprobe-Check fehlgeschlagen (evtl. unvollständig oder ungültiges Format): {os.path.basename(file_path)}")
         return False
 
     return True
@@ -203,6 +235,8 @@ def is_file_ready_and_valid(file_path):
 # ==========================================
 def find_existing_video(target_dir=IN_DIR):
     valid_exts = (".mp4", ".mkv", ".mov", ".m4v")
+    if not os.path.isdir(target_dir):
+        return None
     for root, _, files in os.walk(target_dir):
         for file in files:
             if file.lower().endswith(valid_exts):
@@ -332,56 +366,6 @@ def parse_location(location_str):
         return None
 
 
-def generate_auto_thumbnail(video_path, output_path, min_sec=15, max_sec=120):
-    """Generiert ein Thumbnail aus einem definierten Zeitfenster (min_sec bis max_sec)."""
-    if not os.path.exists(video_path):
-        return None
-
-    # 1. Videodauer via ffprobe ermitteln
-    try:
-        cmd_probe = [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            video_path
-        ]
-        res = subprocess.run(cmd_probe, capture_output=True, text=True, check=True)
-        duration = float(res.stdout.strip())
-    except Exception as e:
-        logging.warning(f"Konnte Videodauer für Auto-Thumbnail nicht ermitteln ({e}), nutze Fallback.")
-        duration = 0.0
-
-    # 2. Zielsekunde im Bereich [min_sec, max_sec] berechnen
-    if duration > 0:
-        actual_max = min(int(duration - 1), max_sec)
-        actual_min = min(min_sec, actual_max)
-        target_sec = random.randint(actual_min, actual_max) if actual_min < actual_max else actual_min
-    else:
-        target_sec = min_sec
-
-    logging.info(f"Generiere automatisches Thumbnail bei Sekunde {target_sec}...")
-
-    # 3. Frame mit FFmpeg als Thumbnail extrahieren (1280px Breite für YouTube)
-    cmd_thumb = [
-        "ffmpeg", "-y",
-        "-ss", str(target_sec),
-        "-i", video_path,
-        "-vframes", "1",
-        "-vf", "scale=1280:-1",
-        "-q:v", "2",
-        output_path
-    ]
-
-    try:
-        subprocess.run(cmd_thumb, capture_output=True, text=True, check=True)
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            return output_path
-    except Exception as e:
-        logging.warning(f"Fehler bei automatischer Thumbnail-Generierung: {e}")
-
-    return None
-
-
 def extract_metadata_and_thumb(file_path):
     metadata = {
         "title": None,
@@ -422,17 +406,15 @@ def extract_metadata_and_thumb(file_path):
     except Exception as e:
         logging.error(f"Fehler beim Auslesen der Metadaten via FFprobe: {e}")
 
-    thumb_path = "/tmp/thumb_temp.jpg"
-    temp_attach = "/tmp/attach_temp"
-
-    for p in (thumb_path, temp_attach):
-        if os.path.exists(p):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+    # Eindeutige temporäre Pfade nutzen
+    temp_dir = tempfile.gettempdir()
+    pid = os.getpid()
+    timestamp = int(time.time() * 1000)
+    thumb_path = os.path.join(temp_dir, f"yt_thumb_{pid}_{timestamp}.jpg")
+    temp_attach = os.path.join(temp_dir, f"yt_attach_{pid}_{timestamp}")
 
     try:
+        # 1. Versuch: In der Datei eingebettetes Cover/Attachment extrahieren (z.B. MKV/MP4)
         cmd_mkv = ["ffmpeg", "-y", "-dump_attachment:t:0", temp_attach, "-i", file_path]
         subprocess.run(cmd_mkv, capture_output=True, text=True)
 
@@ -443,24 +425,61 @@ def extract_metadata_and_thumb(file_path):
         if os.path.exists(temp_attach) and os.path.getsize(temp_attach) > 0:
             cmd_conv = ["ffmpeg", "-y", "-i", temp_attach, "-q:v", "2", thumb_path]
             subprocess.run(cmd_conv, capture_output=True, text=True)
-            if os.path.exists(temp_attach):
-                os.remove(temp_attach)
 
-        if not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0:
-            # Werte aus upload.conf / ConfigParser auslesen
-            auto_gen = config.getboolean('settings', 'auto_generate_thumbnail', fallback=True) if 'settings' in config else True
-            min_sec = config.getint('settings', 'auto_thumb_min_sec', fallback=15) if 'settings' in config else 15
-            max_sec = config.getint('settings', 'auto_thumb_max_sec', fallback=120) if 'settings' in config else 120
+        # 2. Versuch: Automatische Frame-Extraktion (falls kein Cover vorhanden & auto_generate_thumbnail = True)
+        if (not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0) and AUTO_GENERATE_THUMBNAIL:
+            duration = metadata["duration"]
+            
+            # Ziel-Timestamp ermitteln
+            if duration <= 0:
+                seek_sec = AUTO_THUMB_MIN_SEC
+            elif duration < AUTO_THUMB_MIN_SEC:
+                seek_sec = max(1, duration // 2)  # Bei sehr kurzen Videos genau die Mitte wählen
+            else:
+                # Wähle die Mitte zwischen Min und Max, begrenze aber durch die tatsächliche Videolänge
+                target_sec = AUTO_THUMB_MIN_SEC + ((AUTO_THUMB_MAX_SEC - AUTO_THUMB_MIN_SEC) // 2)
+                seek_sec = min(target_sec, max(1, duration - 1))
 
-            if auto_gen:
-                generate_auto_thumbnail(file_path, thumb_path, min_sec=min_sec, max_sec=max_sec)
+            logging.info(f"Generiere Auto-Thumbnail bei Sekunde {seek_sec} (Video-Dauer: {duration}s)...")
+
+            # Frame extrahieren
+            cmd_frame = [
+                "ffmpeg", "-y",
+                "-ss", str(seek_sec),
+                "-i", file_path,
+                "-frames:v", "1",
+                "-q:v", "2",
+                thumb_path
+            ]
+            subprocess.run(cmd_frame, capture_output=True, text=True)
+
+            # Fallback: Falls der Seek fehlgeschlagen ist (z.B. unvollständige Keyframe-Indexe), nimm den ersten I-Frame
+            if not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0:
+                logging.warning("Seek fehlgeschlagen, versuche ersten Keyframe zu greifen...")
+                cmd_keyframe = [
+                    "ffmpeg", "-y",
+                    "-discard", "nokey",
+                    "-i", file_path,
+                    "-frames:v", "1",
+                    "-q:v", "2",
+                    thumb_path
+                ]
+                subprocess.run(cmd_keyframe, capture_output=True, text=True)
 
         if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
             metadata["thumb_path"] = thumb_path
-            logging.info("Thumbnail erfolgreich extrahiert.")
+            logging.info(f"Thumbnail erfolgreich zugewiesen: {thumb_path}")
+        else:
+            logging.warning("Kein Thumbnail generiert/gefunden. YouTube wird ein automatisches Frame wählen.")
 
     except Exception as e:
-        logging.warning(f"Konnte kein Thumbnail extrahieren: {e}")
+        logging.warning(f"Fehler bei der Thumbnail-Extraktion: {e}")
+    finally:
+        if os.path.exists(temp_attach):
+            try:
+                os.remove(temp_attach)
+            except OSError:
+                pass
 
     return metadata
 
@@ -469,6 +488,12 @@ def extract_metadata_and_thumb(file_path):
 # FFMPEG LOSSLESS SPLITTER
 # ==========================================
 def split_video_if_needed(work_path):
+    """
+    Prüft die Videodauer. Ist sie größer als SEGMENT_TIME_SEC, wird die Datei
+    verlustfrei in Segmente aufgeteilt.
+    WICHTIG: Die Originaldatei work_path wird hier NICHT gelöscht, damit sie
+    anschließend in DONE_DIR archiviert werden kann.
+    """
     try:
         cmd_probe = [
             "ffprobe",
@@ -516,9 +541,6 @@ def split_video_if_needed(work_path):
         else:
             break
 
-    if os.path.exists(work_path):
-        os.remove(work_path)
-
     return created_segments
 
 
@@ -532,13 +554,29 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
         playlist_id = None
-        list_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50"
-        res = requests.get(list_url, headers=headers)
-        if res.status_code == 200:
-            for item in res.json().get("items", []):
-                if item["snippet"]["title"].lower() == playlist_name.lower():
-                    playlist_id = item["id"]
+        next_page = None
+
+        # Paginierung bei mehr als 50 Playlists
+        while True:
+            list_url = f"https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50"
+            if next_page:
+                list_url += f"&pageToken={next_page}"
+
+            res = requests.get(list_url, headers=headers, timeout=30)
+            if res.status_code == 200:
+                data = res.json()
+                for item in data.get("items", []):
+                    if item["snippet"]["title"].lower() == playlist_name.lower():
+                        playlist_id = item["id"]
+                        break
+                if playlist_id:
                     break
+                next_page = data.get("nextPageToken")
+                if not next_page:
+                    break
+            else:
+                logging.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {res.text}")
+                break
 
         if not playlist_id:
             create_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet,status"
@@ -546,7 +584,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                 "snippet": {"title": playlist_name, "description": "Automatisch erstellt"},
                 "status": {"privacyStatus": privacy}
             }
-            create_res = requests.post(create_url, headers=headers, json=create_body)
+            create_res = requests.post(create_url, headers=headers, json=create_body, timeout=30)
             if create_res.status_code in (200, 201):
                 playlist_id = create_res.json().get("id")
 
@@ -558,10 +596,12 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                     "resourceId": {"kind": "youtube#video", "videoId": video_id}
                 }
             }
-            item_res = requests.post(item_url, headers=headers, json=item_body)
+            item_res = requests.post(item_url, headers=headers, json=item_body, timeout=30)
             if item_res.status_code in (200, 201):
                 logging.info(f"Video {video_id} erfolgreich zur Playlist '{playlist_name}' hinzugefügt.")
                 return True
+            else:
+                logging.warning(f"Video konnte Playlist nicht hinzugefügt werden: {item_res.text}")
 
     except Exception as e:
         logging.error(f"Fehler bei Playlist-API: {e}")
@@ -592,6 +632,12 @@ def upload_single_video(
 
     file_size = os.path.getsize(file_path)
     access_token = get_access_token(cred_file)
+
+    # Chunksize muss ein Vielfaches von 256 KiB sein
+    if chunksize % CHUNK_UNIT_BYTES != 0:
+        adjusted_chunksize = max(CHUNK_UNIT_BYTES, (chunksize // CHUNK_UNIT_BYTES) * CHUNK_UNIT_BYTES)
+        logging.info(f"Chunksize angepasst auf Vielfaches von 256 KiB: {chunksize} -> {adjusted_chunksize} Bytes")
+        chunksize = adjusted_chunksize
 
     tags_list = []
     if isinstance(tags, list):
@@ -635,66 +681,119 @@ def upload_single_video(
     if "recordingDetails" in metadata_body:
         parts += ",recordingDetails"
 
+    # Initialisiere die Resumable Upload Session (EINMAL vor der Upload-Schleife)
     init_url = f"https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part={parts}"
-    headers = {
+    init_headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json; charset=UTF-8",
         "X-Upload-Content-Length": str(file_size),
         "X-Upload-Content-Type": "video/*"
     }
 
-    max_retries = 3
+    logging.info("Initialisiere Resumable Upload Session...")
+    init_res = requests.post(init_url, headers=init_headers, json=metadata_body, timeout=60)
+    if init_res.status_code != 200:
+        raise RuntimeError(f"Session-Init fehlgeschlagen ({init_res.status_code}): {init_res.text}")
+
+    upload_url = init_res.headers.get("Location")
+    if not upload_url:
+        raise RuntimeError("Keine Upload-Location im Header erhalten.")
+
+    logging.info(f"Starte Chunk-Upload ({file_size / (1024 * 1024):.2f} MB) mit Chunksize {chunksize / (1024 * 1024):.1f} MB...")
+
+    max_retries = 5
     video_id = None
+    uploaded_bytes = 0
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            logging.info("Initialisiere Resumable Upload Session...")
-            init_res = requests.post(init_url, headers=headers, json=metadata_body)
-            if init_res.status_code != 200:
-                raise RuntimeError(f"Init fehlgeschlagen ({init_res.status_code}): {init_res.text}")
+    with open(file_path, "rb") as f:
+        while uploaded_bytes < file_size:
+            chunk_start = uploaded_bytes
+            f.seek(chunk_start)
+            chunk = f.read(chunksize)
+            chunk_len = len(chunk)
+            chunk_end = chunk_start + chunk_len - 1
 
-            upload_url = init_res.headers.get("Location")
-            if not upload_url:
-                raise RuntimeError("Keine Upload-Location im Header erhalten.")
+            chunk_headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Range": f"bytes {chunk_start}-{chunk_end}/{file_size}",
+                "Content-Type": "video/*"
+            }
 
-            logging.info(f"Starte Chunk-Upload ({file_size / 1024 / 1024:.2f} MB) mit Chunksize {chunksize} Bytes...")
-
-            with open(file_path, "rb") as f:
-                uploaded_bytes = 0
-                while uploaded_bytes < file_size:
-                    chunk = f.read(chunksize)
-                    chunk_len = len(chunk)
-                    start_byte = uploaded_bytes
-                    end_byte = uploaded_bytes + chunk_len - 1
-
-                    chunk_headers = {
-                        "Authorization": f"Bearer {access_token}",
-                        "Content-Range": f"bytes {start_byte}-{end_byte}/{file_size}",
-                        "Content-Type": "video/*"
-                    }
-
-                    put_res = requests.put(upload_url, headers=chunk_headers, data=chunk)
+            # Retry-Schleife für den jeweiligen Chunk
+            chunk_success = False
+            for attempt in range(1, max_retries + 1):
+                try:
+                    put_res = requests.put(upload_url, headers=chunk_headers, data=chunk, timeout=120)
 
                     if put_res.status_code in (200, 201):
                         resp_data = put_res.json()
                         video_id = resp_data.get("id")
-                        logging.info(f"Upload ERFOLGREICH! Video-ID: {video_id}")
+                        uploaded_bytes = file_size
+                        chunk_success = True
+                        logging.info(f"Upload ERFOLGREICH abgeschlossen! Video-ID: {video_id}")
                         break
+
                     elif put_res.status_code == 308:
-                        uploaded_bytes += chunk_len
+                        # Upload unvollständig, Range-Header prüfen
+                        range_hdr = put_res.headers.get("Range")
+                        if range_hdr and "-" in range_hdr:
+                            uploaded_bytes = int(range_hdr.split("-")[1]) + 1
+                        else:
+                            uploaded_bytes += chunk_len
+
+                        # Sicherheits-Check: Setze den Offset auf das nächste Vielfache von 256 KiB zurück, 
+                        # falls Google den Stream an einer ungeraden Byte-Grenze unterbrochen hat.
+                        if uploaded_bytes < file_size and uploaded_bytes % CHUNK_UNIT_BYTES != 0:
+                            uploaded_bytes = (uploaded_bytes // CHUNK_UNIT_BYTES) * CHUNK_UNIT_BYTES
+                            logging.warning(f"Offset korrigiert auf 256-KiB-Grenze: {uploaded_bytes} Bytes")
+
+                        pct = (uploaded_bytes / file_size) * 100
+                        logging.info(f"Fortschritt: {uploaded_bytes / (1024*1024):.1f} / {file_size / (1024*1024):.1f} MB ({pct:.1f}%)")
+                        chunk_success = True
+                        break
+
                     else:
-                        raise RuntimeError(f"Fehler beim Chunk-Upload ({put_res.status_code}): {put_res.text}")
+                        raise RuntimeError(f"HTTP-Fehler beim Chunk-Upload ({put_res.status_code}): {put_res.text}")
 
-            if video_id:
-                break
+                except Exception as e:
+                    logging.warning(f"Chunk-Upload Versuch {attempt}/{max_retries} fehlgeschlagen: {e}")
+                    if attempt == max_retries:
+                        raise
 
-        except Exception as e:
-            logging.warning(f"Upload-Versuch {attempt}/{max_retries} fehlgeschlagen: {e}")
-            if attempt == max_retries:
-                raise
-            time.sleep(attempt * 15)
-            access_token = get_access_token(cred_file)
+                    time.sleep(attempt * 5)
 
+                    # Token erneuern
+                    try:
+                        access_token = get_access_token(cred_file)
+                    except Exception as tok_err:
+                        logging.warning(f"Konnte Token nicht auffrischen: {tok_err}")
+
+                    # Google Upload-Status abfragen (Resumable Status Check)
+                    try:
+                        status_headers = {
+                            "Authorization": f"Bearer {access_token}",
+                            "Content-Range": f"bytes */{file_size}"
+                        }
+                        status_res = requests.put(upload_url, headers=status_headers, timeout=30)
+                        if status_res.status_code == 308:
+                            range_hdr = status_res.headers.get("Range")
+                            if range_hdr and "-" in range_hdr:
+                                uploaded_bytes = int(range_hdr.split("-")[1]) + 1
+                                logging.info(f"Wiederaufnahme bei Byte {uploaded_bytes}...")
+                                break  # Raus aus der Chunk-Retry-Schleife, um ab der neuen Position fortzufahren
+                        elif status_res.status_code in (200, 201):
+                            video_id = status_res.json().get("id")
+                            uploaded_bytes = file_size
+                            chunk_success = True
+                            logging.info(f"Video war bereits vollständig übertragen! Video-ID: {video_id}")
+                            break
+                    except Exception as query_err:
+                        logging.warning(f"Konnte Status nicht abfragen: {query_err}")
+
+            if not chunk_success and video_id is None:
+                raise RuntimeError(f"Upload nach {max_retries} Versuchen an Position {uploaded_bytes} abgebrochen.")
+
+    # Thumbnail setzen
     if video_id and thumb_path and os.path.exists(thumb_path):
         try:
             logging.info(f"Lade Thumbnail für Video {video_id} hoch...")
@@ -704,17 +803,19 @@ def upload_single_video(
                 "Content-Type": "image/jpeg"
             }
             with open(thumb_path, "rb") as tf:
-                thumb_res = requests.post(thumb_url, headers=thumb_headers, data=tf.read())
+                thumb_res = requests.post(thumb_url, headers=thumb_headers, data=tf.read(), timeout=60)
                 if thumb_res.status_code == 200:
                     logging.info("Thumbnail gesetzt.")
                 else:
-                    logging.warning(f"Thumbnail-Upload fehlgeschlagen: {thumb_res.text}")
+                    logging.warning(f"Thumbnail-Upload fehlgeschlagen ({thumb_res.status_code}): {thumb_res.text}")
         except Exception as e:
             logging.warning(f"Fehler beim Thumbnail-Upload: {e}")
 
+    # Zur Playlist hinzufügen
     if playlist_name and video_id:
         add_video_to_playlist(video_id, playlist_name, access_token, privacy=privacy)
 
+    # Im Browser öffnen
     if video_id and open_link:
         video_url = f"https://www.youtube.com/watch?v={video_id}"
         logging.info(f"Öffne Video-URL im Browser: {video_url}")
@@ -730,13 +831,19 @@ def process_upload(args, target_dir=IN_DIR):
     """Verarbeitet Videos und wendet übergebene CLI-Argumente an."""
     input_path = wait_for_input(target_dir)
 
-    if not is_file_ready_and_valid(input_path):
-        logging.warning("Datei noch nicht bereit. Warte 15 Sekunden...")
-        time.sleep(15)
-        if not is_file_ready_and_valid(input_path):
-            logging.error(f"Datei beschädigt. Verschiebe nach corrupt: {input_path}")
-            shutil.move(input_path, os.path.join(CORRUPT_DIR, os.path.basename(input_path)))
-            return False
+    # Datei-Integritätsprüfung mit mehreren Versuchen
+    is_ready = False
+    for check_round in range(5):
+        if is_file_ready_and_valid(input_path):
+            is_ready = True
+            break
+        logging.warning(f"Datei noch nicht bereit. Warte 10 Sekunden... (Versuch {check_round + 1}/5)")
+        time.sleep(10)
+
+    if not is_ready:
+        logging.error(f"Datei unvollständig oder beschädigt. Verschiebe nach corrupt: {input_path}")
+        shutil.move(input_path, os.path.join(CORRUPT_DIR, os.path.basename(input_path)))
+        return False
 
     is_symlink = os.path.islink(input_path)
     filename = os.path.basename(input_path)
@@ -779,53 +886,73 @@ def process_upload(args, target_dir=IN_DIR):
     cred_path = args.credentials_file or args.client_secrets or CREDENTIALS_FILE
 
     segments = split_video_if_needed(work_path)
+    is_split = len(segments) > 1
 
-    for idx, seg_file in enumerate(segments, start=1):
-        final_title = title_base
-        if len(segments) > 1:
-            template = args.title_template or "{title} [{n}/{total}]"
-            final_title = template.format(title=title_base, n=idx, total=len(segments))
+    try:
+        for idx, seg_file in enumerate(segments, start=1):
+            final_title = title_base
+            if is_split:
+                template = args.title_template or "{title} [{n}/{total}]"
+                final_title = template.format(title=title_base, n=idx, total=len(segments))
 
-        upload_single_video(
-            file_path=seg_file,
-            title=final_title,
-            desc=description,
-            category=category,
-            tags=tags,
-            rec_date=rec_date_flag,
-            thumb_path=thumb_path,
-            playlist_name=target_playlist,
-            privacy=args.privacy,
-            publish_at=args.publish_at,
-            license_type=args.license,
-            location=args.location,
-            default_lang=args.default_language,
-            default_audio_lang=args.default_audio_language,
-            embeddable=args.embeddable,
-            cred_file=cred_path,
-            chunksize=args.chunksize,
-            open_link=args.open_link
-        )
+            upload_single_video(
+                file_path=seg_file,
+                title=final_title,
+                desc=description,
+                category=category,
+                tags=tags,
+                rec_date=rec_date_flag,
+                thumb_path=thumb_path,
+                playlist_name=target_playlist,
+                privacy=args.privacy,
+                publish_at=args.publish_at,
+                license_type=args.license,
+                location=args.location,
+                default_lang=args.default_language,
+                default_audio_lang=args.default_audio_language,
+                embeddable=args.embeddable,
+                cred_file=cred_path,
+                chunksize=args.chunksize,
+                open_link=args.open_link
+            )
 
-        if len(segments) > 1 and os.path.exists(seg_file):
-            os.remove(seg_file)
+            # Bei gesplitteten Videos nur die temporären Segmente löschen
+            if is_split and os.path.exists(seg_file) and seg_file != work_path:
+                try:
+                    os.remove(seg_file)
+                except OSError:
+                    pass
 
-    if meta["thumb_path"] and os.path.exists(meta["thumb_path"]):
-        try:
-            os.remove(meta["thumb_path"])
-        except OSError:
-            pass
+        # Nach erfolgreichem Upload das Thumbnail bereinigen
+        if meta["thumb_path"] and os.path.exists(meta["thumb_path"]):
+            try:
+                os.remove(meta["thumb_path"])
+            except OSError:
+                pass
 
-    if is_symlink:
-        if os.path.exists(work_path):
-            os.remove(work_path)
-    else:
-        if os.path.exists(work_path):
-            done_path = os.path.join(DONE_DIR, filename)
-            shutil.move(work_path, done_path)
-            logging.info(f"Datei archiviert nach: {done_path}")
+        # Archivierung der Originaldatei
+        if is_symlink:
+            if os.path.exists(work_path):
+                os.remove(work_path)
+        else:
+            if os.path.exists(work_path):
+                done_path = os.path.join(DONE_DIR, filename)
+                shutil.move(work_path, done_path)
+                logging.info(f"Datei erfolgreich archiviert nach: {done_path}")
 
-    return True
+        return True
+
+    except Exception as e:
+        logging.error(f"Fehler während des Uploads von {filename}: {e}", exc_info=True)
+        # Wenn Segmente erstellt wurden, aufräumen
+        if is_split:
+            for seg_file in segments:
+                if seg_file != work_path and os.path.exists(seg_file):
+                    try:
+                        os.remove(seg_file)
+                    except OSError:
+                        pass
+        raise
 
 
 # ==========================================
@@ -836,7 +963,6 @@ def parse_args():
         description=f"{__title__} v{__version__} (YouTube Data API v3)"
     )
 
-    # Version Parameter hinzufügen
     parser.add_argument(
         "-v", "--version",
         action="version",
@@ -883,16 +1009,15 @@ def parse_args():
         help="Template for multiple videos (default: {title} [{n}/{total}])"
     )
 
-    # Korrigierte Boolean Action für Embedding
     parser.add_argument(
         "--embeddable", action=argparse.BooleanOptionalAction, default=True,
         help="Allow video embedding"
     )
 
     parser.add_argument("--client-secrets", type=str, help="Path to client secrets JSON file")
-    parser.add_argument("--credentials-file", type=str, default=CREDENTIALS_FILE, help="Path to credentials storage JSON file")
-    parser.add_argument("--auth-browser", action="store_true", help="Open GUI browser to authenticate if required")
-    parser.add_argument("--chunksize", type=int, default=104857600, help="Update file chunksize in bytes (default: 100MB)")
+    # default=None sorgt dafür, dass --client-secrets korrekt als Fallback greift
+    parser.add_argument("--credentials-file", type=str, default=None, help="Path to credentials storage JSON file")
+    parser.add_argument("--chunksize", type=int, default=104857600, help="Upload file chunksize in bytes (default: 100MB)")
     parser.add_argument("--open-link", action="store_true", help="Open video URL in web browser after upload completes")
 
     args = parser.parse_args()
@@ -913,8 +1038,10 @@ def setup_logging(log_file, log_to_file=True):
         except (PermissionError, OSError) as e:
             sys.stderr.write(f"Warnung: Log-Datei {log_file} nicht schreibbar ({e}). Logge nur auf stdout.\n")
 
+    log_level = logging.DEBUG if os.environ.get("DEBUG") == "1" else logging.INFO
+
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=handlers,
         force=True
@@ -928,7 +1055,7 @@ def main():
     is_service_mode = bool(args.daemon or args.auto)
     setup_logging(LOG_FILE, log_to_file=is_service_mode)
 
-    # Verzeichnisse NUR anlegen, wenn wir im Ordner-Überwachungs-/Auto-Modus sind
+    # Verzeichnisse nur anlegen, wenn im Service-Modus
     if is_service_mode:
         ensure_directories()
 
