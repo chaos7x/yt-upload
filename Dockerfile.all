@@ -20,29 +20,12 @@ COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
 # ==========================================
 RUN apt-get update && apt-get install -y  --no-install-recommends \
     mc \
-    git \
     inotify-tools \
     jq \
     libimage-exiftool-perl \
+    python3-requests \
     python3-inotify \
-    python3-pip \
     && rm -rf /var/lib/apt/lists/*
-
-# ==========================================
-# STUFE 3: Python-Tools installieren (ohne cache)
-# ==========================================
-#RUN pip install --no-cache-dir --break-system-packages google-auth-oauthlib requests-oauthlib && \
-#    git clone https://github.com/tokland/youtube-upload /tmp/youtube-upload && \
-#    pip install --no-cache-dir --break-system-packages /tmp/youtube-upload && \
-#    rm -rf /tmp/youtube-upload
-
-# ==========================================
-# STUFE 3: Python-Tools & youtube-upload direkt installieren
-# ==========================================
-RUN pip install --no-cache-dir --break-system-packages \
-    google-auth-oauthlib \
-    requests-oauthlib \
-    git+https://github.com/tokland/youtube-upload.git
 
 # ==========================================
 # STUFE 4: Arbeitsverzeichnis & Rechte
