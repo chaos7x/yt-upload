@@ -148,8 +148,10 @@ def get_access_token(cred_file=None):
 # ==========================================
 def ensure_directories():
     for d in [IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR]:
-        os.makedirs(d, exist_ok=True)
-
+        try:
+            os.makedirs(d, exist_ok=True)
+        except (PermissionError, OSError) as e:
+            sys.stderr.write(f"Warnung: Kann Verzeichnis {d} nicht anlegen ({e}).\n")
 
 def cleanup_work_dir():
     logging.warning("Bereinige WORK-Verzeichnis...")
@@ -865,8 +867,10 @@ def main():
     is_service_mode = bool(args.daemon or args.auto)
     setup_logging(LOG_FILE, log_to_file=is_service_mode)
 
-    # Verzeichnisse anlegen (doppelten Aufruf entfernt)
-    ensure_directories()
+    # Verzeichnisse NUR anlegen, wenn wir im Ordner-Überwachungs-/Auto-Modus sind
+    if is_service_mode:
+        ensure_directories()
+
     cred_path = args.credentials_file or args.client_secrets or CREDENTIALS_FILE
 
     # --- MODUS 1: DAEMON MODUS (-D) ---
