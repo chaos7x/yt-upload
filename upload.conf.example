@@ -3,10 +3,14 @@ in_dir = /videos/in
 work_dir = /videos/work
 done_dir = /videos/done
 corrupt_dir = /videos/corrupt
-oauth_dir = /app/oauth
 log_file = /log/upload.log
+credentials_file = /app/oauth/youtube-upload-credentials.json
 
 [settings]
-enable_dynamic_playlists = true
-chunk_size = 104857600
+enable_dynamic_playlists = false
 privacy_status = unlisted
+default_category = Entertainment
+default_language = de
+allow_embedding = true
+default_description = Automatischer Upload via Script.
+default_tags = Upload, Video
