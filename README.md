@@ -106,6 +106,31 @@ yt-upload [-h] [-v] [-a [PATH]] [-D] [-t TITLE] [-c CATEGORY] [-d DESCRIPTION]
           [--credentials-file PATH] [--chunksize BYTES] [--open-link]
           [files ...]
 ```
+Die Konfig-Datei upload.conf
+Unter /etc/yt-upload/ befidet sich die upload.conf.example. Dies ist dafür gedacht, wenn der Uploader nicht im Docker-Container, sondern nativ auf dem OS läuft. 
+Benötigt werden die Pakete "python3-requests, python3-inotify"
+```bash
+apt install python3-requests python3-inotify
+```
+
+```ini
+[paths]
+in_dir = /videos/in
+work_dir = /videos/work
+done_dir = /videos/done
+corrupt_dir = /videos/corrupt
+log_file = /log/upload.log
+credentials_file = /app/oauth/youtube-upload-credentials.json
+
+[settings]
+enable_dynamic_playlists = false
+privacy_status = unlisted
+default_category = Entertainment
+default_language = de
+allow_embedding = true
+default_description = Automatischer Upload via Script.
+default_tags = Upload, Video
+```
 
 ### Wichtige CLI-Flags
 ```markdown
