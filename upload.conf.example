@@ -1,0 +1,12 @@
+[paths]
+in_dir = /videos/in
+work_dir = /videos/work
+done_dir = /videos/done
+corrupt_dir = /videos/corrupt
+oauth_dir = /app/oauth
+log_file = /log/upload.log
+
+[settings]
+enable_dynamic_playlists = true
+chunk_size = 104857600
+privacy_status = unlisted

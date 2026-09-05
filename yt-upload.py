@@ -41,6 +41,7 @@ import time
 import webbrowser
 import unicodedata
 import requests
+import configparser
 
 if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
     os.environ['DEBUG'] = '1'
@@ -57,11 +58,15 @@ except ImportError:
 # ==========================================
 # KONFIGURATION & PATHS
 # ==========================================
+# 1. Standard-Fallbacks (Docker / Bare-Metal Defaults)
+CONF_PATH = os.environ.get('CONFIG_FILE', '/etc/yt-upload/upload.conf')
+
 IN_DIR = "/videos/in"
 WORK_DIR = "/videos/work"
 DONE_DIR = "/videos/done"
 CORRUPT_DIR = "/videos/corrupt"
 LOG_FILE = "/log/upload.log"
+CREDENTIALS_FILE = "/app/oauth/youtube-upload-credentials.json"
 
 SEGMENT_TIME_SEC = 36000  # 10 Stunden Limit (in Sekunden)
 
@@ -69,14 +74,38 @@ DEFAULT_DESCRIPTION = "Automatischer Upload via Script."
 DEFAULT_TAGS = "Upload, Video"
 DEFAULT_CATEGORY = "Entertainment"
 
-DYNAMIC_PLAYLISTS = os.getenv("ENABLE_DYNAMIC_PLAYLISTS", "false").lower() in ("1", "true", "yes")
-
 VIDEO_PRIVACY = "unlisted"  # 'public', 'private', 'unlisted'
 VIDEO_LANGUAGE = "de"
 ALLOW_EMBEDDING = True
-
-CREDENTIALS_FILE = "/app/oauth/youtube-upload-credentials.json"
 PLAYLIST_NAME = ""
+
+# 2. Config-Datei einlesen (falls vorhanden)
+config = configparser.ConfigParser()
+if os.path.isfile(CONF_PATH):
+    config.read(CONF_PATH)
+
+    if 'paths' in config:
+        IN_DIR = config.get('paths', 'in_dir', fallback=IN_DIR)
+        WORK_DIR = config.get('paths', 'work_dir', fallback=WORK_DIR)
+        DONE_DIR = config.get('paths', 'done_dir', fallback=DONE_DIR)
+        CORRUPT_DIR = config.get('paths', 'corrupt_dir', fallback=CORRUPT_DIR)
+        LOG_FILE = config.get('paths', 'log_file', fallback=LOG_FILE)
+        CREDENTIALS_FILE = config.get('paths', 'credentials_file', fallback=CREDENTIALS_FILE)
+
+    if 'settings' in config:
+        DEFAULT_DESCRIPTION = config.get('settings', 'default_description', fallback=DEFAULT_DESCRIPTION)
+        DEFAULT_TAGS = config.get('settings', 'default_tags', fallback=DEFAULT_TAGS)
+        DEFAULT_CATEGORY = config.get('settings', 'default_category', fallback=DEFAULT_CATEGORY)
+        VIDEO_PRIVACY = config.get('settings', 'privacy_status', fallback=VIDEO_PRIVACY)
+        VIDEO_LANGUAGE = config.get('settings', 'default_language', fallback=VIDEO_LANGUAGE)
+        ALLOW_EMBEDDING = config.getboolean('settings', 'allow_embedding', fallback=ALLOW_EMBEDDING)
+        PLAYLIST_NAME = config.get('settings', 'playlist_name', fallback=PLAYLIST_NAME)
+
+# 3. Dynamic Playlists (Env Var überschreibt Config, falls gesetzt)
+DYNAMIC_PLAYLISTS = os.getenv(
+    "ENABLE_DYNAMIC_PLAYLISTS", 
+    str(config.getboolean('settings', 'enable_dynamic_playlists', fallback=False) if os.path.isfile(CONF_PATH) else "false")
+).lower() in ("1", "true", "yes")
 
 # Logging aufsetzen
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
