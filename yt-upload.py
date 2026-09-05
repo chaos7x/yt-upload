@@ -725,6 +725,14 @@ def upload_single_video(
                 try:
                     put_res = requests.put(upload_url, headers=chunk_headers, data=chunk, timeout=120)
 
+                    # Quota-Check: Falls Quota erschöpft ist, pausieren oder beenden
+                    if put_res.status_code == 403:
+                        resp_json = put_res.json()
+                        if "quotaExceeded" in str(resp_json):
+                            logging.critical("YouTube API Quota erschöpft! Stoppe Verarbeitung.")
+                            # Im Daemon-Modus könnte man hier 1h schlafen, im CLI-Modus ist Beenden besser.
+                            sys.exit(1)
+
                     if put_res.status_code in (200, 201):
                         resp_data = put_res.json()
                         video_id = resp_data.get("id")
@@ -741,8 +749,7 @@ def upload_single_video(
                         else:
                             uploaded_bytes += chunk_len
 
-                        # Sicherheits-Check: Setze den Offset auf das nächste Vielfache von 256 KiB zurück, 
-                        # falls Google den Stream an einer ungeraden Byte-Grenze unterbrochen hat.
+                        # Sicherheits-Check: Setze den Offset auf das nächste Vielfache von 256 KiB zurück
                         if uploaded_bytes < file_size and uploaded_bytes % CHUNK_UNIT_BYTES != 0:
                             uploaded_bytes = (uploaded_bytes // CHUNK_UNIT_BYTES) * CHUNK_UNIT_BYTES
                             logging.warning(f"Offset korrigiert auf 256-KiB-Grenze: {uploaded_bytes} Bytes")
@@ -752,15 +759,22 @@ def upload_single_video(
                         chunk_success = True
                         break
 
+                    elif put_res.status_code >= 500:
+                        logging.warning(f"YouTube Server Fehler ({put_res.status_code}). Retry...")
+                        raise ConnectionError(f"Server Side Error {put_res.status_code}")
+
                     else:
                         raise RuntimeError(f"HTTP-Fehler beim Chunk-Upload ({put_res.status_code}): {put_res.text}")
 
-                except Exception as e:
-                    logging.warning(f"Chunk-Upload Versuch {attempt}/{max_retries} fehlgeschlagen: {e}")
+                except (requests.exceptions.RequestException, ConnectionError) as e:
+                    # Exponential Backoff bei Netzwerkfehlern
+                    wait_time = (2 ** attempt) * 5
+                    logging.warning(f"Chunk-Upload Versuch {attempt}/{max_retries} fehlgeschlagen ({e}). Retry in {wait_time}s...")
+                    
                     if attempt == max_retries:
                         raise
 
-                    time.sleep(attempt * 5)
+                    time.sleep(wait_time)
 
                     # Token erneuern
                     try:
