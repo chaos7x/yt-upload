@@ -107,17 +107,6 @@ DYNAMIC_PLAYLISTS = os.getenv(
     str(config.getboolean('settings', 'enable_dynamic_playlists', fallback=False) if os.path.isfile(CONF_PATH) else "false")
 ).lower() in ("1", "true", "yes")
 
-# Logging aufsetzen
-os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
 
 # ==========================================
 # OAUTH TOKEN HELPER
@@ -852,11 +841,32 @@ def parse_args():
 
     return args
 
+def setup_logging(log_file, log_to_file=True):
+    handlers = [logging.StreamHandler(sys.stdout)]
+    
+    if log_to_file and log_file:
+        try:
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            handlers.append(logging.FileHandler(log_file))
+        except (PermissionError, OSError) as e:
+            sys.stderr.write(f"Warnung: Log-Datei {log_file} nicht schreibbar ({e}). Logge nur auf stdout.\n")
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=handlers,
+        force=True
+    )
 
 def main():
-    ensure_directories()
     args = parse_args()
 
+    # Logging erst nach args-Parsing aufsetzen
+    is_service_mode = bool(args.daemon or args.auto)
+    setup_logging(LOG_FILE, log_to_file=is_service_mode)
+
+    # Verzeichnisse anlegen (doppelten Aufruf entfernt)
+    ensure_directories()
     cred_path = args.credentials_file or args.client_secrets or CREDENTIALS_FILE
 
     # --- MODUS 1: DAEMON MODUS (-D) ---
