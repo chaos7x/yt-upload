@@ -541,11 +541,14 @@ def split_video_if_needed(work_path):
     base_name, ext = os.path.splitext(filename)
     segment_pattern = os.path.join(WORK_DIR, f"{base_name}_part%02d{ext}")
 
-    for stale_segment in glob.glob(os.path.join(WORK_DIR, f"{base_name}_part[0-9][0-9]{ext}")):
-        try:
-            os.remove(stale_segment)
-        except OSError as e:
-            raise RuntimeError(f"Altes Segment kann nicht gelöscht werden: {stale_segment}") from e
+ # Alte Segmente anhand von Prefix und Extension sauber bereinigen
+    for item in os.listdir(WORK_DIR):
+        if item.startswith(f"{base_name}_part") and item.endswith(ext):
+            stale_segment = os.path.join(WORK_DIR, item)
+            try:
+                os.remove(stale_segment)
+            except OSError as e:
+                raise RuntimeError(f"Altes Segment kann nicht gelöscht werden: {stale_segment}") from e
 
     cmd_split = [
         "ffmpeg", "-y", "-i", work_path, "-c", "copy", "-map", "0",
@@ -1121,6 +1124,7 @@ def main():
     # Verzeichnisse nur anlegen, wenn im Service-Modus
     if is_service_mode:
         ensure_directories()
+        cleanup_work_dir()  # <--- Hier einmalig beim Start aufräumen
 
     cred_path = args.credentials_file or CREDENTIALS_FILE
 
