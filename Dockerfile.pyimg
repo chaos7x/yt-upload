@@ -1,54 +1,67 @@
+# ==========================================
+# STUFE 0: Statische Binaries bereitstellen
+# ==========================================
+# Holt die offiziellen, statisch gelinkten FFmpeg- und FFprobe-Binaries von mwader
 FROM mwader/static-ffmpeg:latest AS ffmpeg-binaries
-FROM python:3-slim
 
+# ==========================================
+# STUFE 1: FINAL STAGE (Schlankes Laufzeit-Image)
+# ==========================================
+FROM python:3-slim
 ARG VERSION
 ARG BUILD_DATE
 
 LABEL version="${VERSION}"
 LABEL build_date="${BUILD_DATE}"
 LABEL maintainer="Chaos7x"
-LABEL purpose="YouTube upload automation with ffmpeg + mc + inotify"
+LABEL purpose="YouTube upload automation with ffmpeg + python"
 
-# ==========================================
-# STUFE 1: Statische Binaries kopieren (Dauert 0 Sekunden)
-# ==========================================
+# ------------------------------------------
+# LAYER 1: FFmpeg Binaries aus STUFE 0 kopieren
+# ------------------------------------------
 COPY --from=ffmpeg-binaries /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
 
 # ==========================================
-# STUFE 2: Nur noch mc und inotify über apt holen (Super schnell!)
+# LAYER 2: System-Tools & C-Bibliotheken über apt
+# (Python-Module wandern ab jetzt in pip!)
 # ==========================================
-RUN apt-get update && apt-get install -y  --no-install-recommends \
+# Installiert ExifTool, Midnight Commander (mc) 
+# sowie ca-certificates direkt über den Paketmanager.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcom-err2 \
     mc \
-    inotify-tools \
-    mkvtoolnix \
-    jq \
-    libimage-exiftool-perl \
-    python3-requests \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # ==========================================
-# STUFE 4: Arbeitsverzeichnis & Rechte
+# LAYER 3: Python-Abhängigkeiten über pip installieren
 # ==========================================
+RUN pip install --no-cache-dir --break-system-packages requests inotify
+
+# Arbeitsverzeichnis & Home-Variable setzen
 WORKDIR /app
-#RUN chmod 777 /app
-RUN mkdir .cache .config .local && chmod 777 .cache .config .local
+ENV HOME=/app
 
-# Neues, separates Datenverzeichnis für deine Videos erstellen und freigeben
-RUN mkdir /videos && chmod 777 /videos
+# ------------------------------------------
+# LAYER 4: Daten- & Log-Verzeichnisse anlegen
+# ------------------------------------------
+RUN mkdir /videos /log /etc/yt-upload/ && chmod 777 /videos /log
 
-# Log Verzeichnis erstellen und freigeben
-RUN mkdir /log && chmod 777 /log
-
-# ==========================================
-# STUFE 5: Deine lokalen Skripte & Configs
-# ==========================================
+# ------------------------------------------
+# LAYER 5: Lokale Skripte & Configs kopieren
+# ------------------------------------------
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY yt-upload.py /usr/local/bin/yt-upload
 COPY get_token.py /usr/local/bin/get_token
-RUN chmod +x /usr/local/bin/yt-upload /usr/local/bin/entrypoint.sh /usr/local/bin/get_token
+COPY bashrc /etc/global.bashrc
+COPY upload.conf.example /etc/yt-upload/
 
-COPY bashrc /app/.bashrc
-ENV HOME=/app
+# ------------------------------------------
+# LAYER 6: Rechte setzen & Symlinks anlegen
+# ------------------------------------------
+RUN chmod +x /usr/local/bin/yt-upload /usr/local/bin/entrypoint.sh /usr/local/bin/get_token \
+    && ln -s /etc/global.bashrc /tmp/.bashrc \
+    && ln -s /etc/global.bashrc /app/.bashrc
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

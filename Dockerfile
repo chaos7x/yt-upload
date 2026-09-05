@@ -34,7 +34,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-inotify \
     libcom-err2 \
     mc \
-    libimage-exiftool-perl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
