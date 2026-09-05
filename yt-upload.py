@@ -11,6 +11,13 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 
+# ==============================================================================
+# YouTube Video Uploader & Auto-Archiver
+# ==============================================================================
+
+__title__ = "YouTube Video Uploader & Auto-Archiver"
+__version__ = "2.0.0"
+
 
 """
 Automatischer YouTube Upload Worker & CLI Uploader (FFmpeg / FFprobe / Native REST API v2.0.0).
@@ -44,8 +51,10 @@ import requests
 
 try:
     import inotify.adapters
+    HAS_INOTIFY = True
 except ImportError:
     inotify = None
+    HAS_INOTYFY = False
 
 # ==========================================
 # KONFIGURATION & PATHS
@@ -730,8 +739,7 @@ def process_upload(target_dir=IN_DIR):
 # ==========================================
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="YouTube Video Uploader & Auto-Archiver (v2.0.0)",
-        formatter_class=argparse.RawTextHelpFormatter
+    description=f"{__title__} (v{__version__})"
     )
 
     # --- Betriebsmodi ---
