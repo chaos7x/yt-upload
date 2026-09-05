@@ -5,7 +5,6 @@
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
@@ -15,31 +14,25 @@
 # YouTube Video Uploader & Auto-Archiver
 # ==============================================================================
 
-__title__ = "YouTube Video Uploader & Auto-Archiver"
-__version__ = "2.0.0"
-
-
 """
-Automatischer YouTube Upload Worker & CLI Uploader (FFmpeg / FFprobe / Native REST API v2.0.0).
-
+Automatischer YouTube Upload Worker & CLI Uploader (Native REST API v2.0.0).
 Bietet drei Betriebsmodi:
 1. Manuell (CLI): Upload einzelner Dateien wie mit dem klassischen youtube-upload.
-2. Auto-Pipeline (-a): Einmalige Batch-Verarbeitung eines Zielverzeichnisses mit FFmpeg-Splitting & Metadatenvererbung.
-3. Dämon-Modus (-D): Dauerhafter Hintergrund-Dienst mit inotify-Überwachung.
+2. Auto-Pipeline (-a --auto): Einmalige Batch-Verarbeitung eines Zielverzeichnisses mit FFmpeg-Splitting & Metadatenvererbung.
+3. Dämon-Modus (-D --daemon): Dauerhafter Hintergrund-Dienst mit inotify-Überwachung.
 
 SYSTEM-VORAUSSETZUNGEN:
 - ffmpeg & ffprobe (im System-PATH vorhanden für Splitting & Thumbnail-Extraktion)
 - python3-inotify (optional, aber empfohlen für den -D Dämon-Modus ohne Polling-Overhead)
 """
 
+__title__ = "YouTube Video Uploader & Auto-Archiver"
+__version__ = "2.0.0"
+
 import argparse
 import json
 import logging
 import os
-if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
-    os.environ['DEBUG'] = '1'
-else:
-    os.environ['DEBUG'] = '0'
 import re
 import shutil
 import subprocess
@@ -49,12 +42,17 @@ import webbrowser
 import unicodedata
 import requests
 
+if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
+    os.environ['DEBUG'] = '1'
+else:
+    os.environ['DEBUG'] = '0'
+
 try:
     import inotify.adapters
     HAS_INOTIFY = True
 except ImportError:
     inotify = None
-    HAS_INOTYFY = False
+    HAS_INOTIFY = False  # Typo korrigiert
 
 # ==========================================
 # KONFIGURATION & PATHS
@@ -101,7 +99,7 @@ def get_access_token(cred_file=None):
     if not os.path.exists(target_cred):
         raise FileNotFoundError(f"Credentials-Datei nicht gefunden: {target_cred}")
 
-    with open(target_cred, "r") as f:
+    with open(target_cred, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     # Unterstützung für verschiedene OAuth-JSON Strukturen (Google Client Secrets vs Token Files)
@@ -294,7 +292,6 @@ def sanitize_text(text):
 
 
 def parse_location(location_str):
-    """Parst Koordinaten im Format 'latitude=VAL,longitude=VAL[,altitude=VAL]'"""
     if not location_str:
         return None
     try:
@@ -356,7 +353,10 @@ def extract_metadata_and_thumb(file_path):
 
     for p in (thumb_path, temp_attach):
         if os.path.exists(p):
-            os.remove(p)
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
     try:
         cmd_mkv = ["ffmpeg", "-y", "-dump_attachment:t:0", temp_attach, "-i", file_path]
@@ -520,7 +520,6 @@ def upload_single_video(
     elif isinstance(tags, str) and tags:
         tags_list = [t.strip() for t in tags.split(",") if t.strip()]
 
-    # Metadaten-Body aufbauen
     snippet = {
         "title": title,
         "description": desc or "",
@@ -546,9 +545,7 @@ def upload_single_video(
     }
 
     if rec_date:
-        metadata_body["recordingDetails"] = {
-            "recordingDate": rec_date
-        }
+        metadata_body["recordingDetails"] = {"recordingDate": rec_date}
 
     parsed_loc = parse_location(location) if isinstance(location, str) else location
     if parsed_loc:
@@ -597,7 +594,6 @@ def upload_single_video(
                         "Content-Type": "video/*"
                     }
 
-                    logging.info(f"Sende Bytes {start_byte}-{end_byte}/{file_size}...")
                     put_res = requests.put(upload_url, headers=chunk_headers, data=chunk)
 
                     if put_res.status_code in (200, 201):
@@ -620,7 +616,6 @@ def upload_single_video(
             time.sleep(attempt * 15)
             access_token = get_access_token(cred_file)
 
-    # Thumbnail nachträglich hochladen
     if video_id and thumb_path and os.path.exists(thumb_path):
         try:
             logging.info(f"Lade Thumbnail für Video {video_id} hoch...")
@@ -638,7 +633,6 @@ def upload_single_video(
         except Exception as e:
             logging.warning(f"Fehler beim Thumbnail-Upload: {e}")
 
-    # Playlist-Zuweisung
     if playlist_name and video_id:
         add_video_to_playlist(video_id, playlist_name, access_token, privacy=privacy)
 
@@ -653,7 +647,8 @@ def upload_single_video(
 # ==========================================
 # PROCESS PIPELINE (AUTOMATION / DAEMON)
 # ==========================================
-def process_upload(target_dir=IN_DIR):
+def process_upload(args, target_dir=IN_DIR):
+    """Verarbeitet Videos und wendet übergebene CLI-Argumente an."""
     input_path = wait_for_input(target_dir)
 
     if not is_file_ready_and_valid(input_path):
@@ -675,35 +670,42 @@ def process_upload(target_dir=IN_DIR):
     meta = extract_metadata_and_thumb(work_path)
 
     filename_base = os.path.splitext(filename)[0]
-    title_base = meta["title"] or filename_base
-    description = meta["description"] or DEFAULT_DESCRIPTION
+
+    # Priorität: CLI Argumente > Datei-Metadaten > Default Fallbacks
+    title_base = args.title or meta["title"] or filename_base
+
+    # Description Ermittlung
+    description = args.description or meta["description"] or DEFAULT_DESCRIPTION
+    if args.description_file and os.path.exists(args.description_file):
+        with open(args.description_file, "r", encoding="utf-8") as df:
+            description = df.read()
 
     if meta["purl"]:
         description += f"\n\nOriginal-Video-URL: {meta['purl']}"
 
-    tags = DEFAULT_TAGS
-    rec_date_flag = None
+    tags = args.tags or DEFAULT_TAGS
+    rec_date_flag = args.recording_date
 
-    if meta["date"]:
+    if meta["date"] and not rec_date_flag:
         mdate = str(meta["date"])
         if re.match(r"^\d{8}$", mdate):
             formatted_date = f"{mdate[:4]}-{mdate[4:6]}-{mdate[6:8]}"
             description += f"\n\nAufnahmedatum: {formatted_date}"
             rec_date_flag = f"{formatted_date}T00:00:00.000Z"
             tags += f", {formatted_date}, {mdate[:4]}, {mdate}"
-        else:
-            description += f"\n\nDatum: {mdate}"
-            tags += f", {mdate}"
 
-    category = meta["genre"] or DEFAULT_CATEGORY
-    target_playlist = (meta["artist"] if DYNAMIC_PLAYLISTS else None) or PLAYLIST_NAME
+    category = args.category or meta["genre"] or DEFAULT_CATEGORY
+    target_playlist = args.playlist or (meta["artist"] if DYNAMIC_PLAYLISTS else None) or PLAYLIST_NAME
+    thumb_path = args.thumbnail or meta["thumb_path"]
+    cred_path = args.credentials_file or args.client_secrets or CREDENTIALS_FILE
 
     segments = split_video_if_needed(work_path)
 
     for idx, seg_file in enumerate(segments, start=1):
         final_title = title_base
         if len(segments) > 1:
-            final_title = f"{title_base} (Teil {idx:02d})"
+            template = args.title_template or "{title} [{n}/{total}]"
+            final_title = template.format(title=title_base, n=idx, total=len(segments))
 
         upload_single_video(
             file_path=seg_file,
@@ -712,15 +714,28 @@ def process_upload(target_dir=IN_DIR):
             category=category,
             tags=tags,
             rec_date=rec_date_flag,
-            thumb_path=meta["thumb_path"],
+            thumb_path=thumb_path,
             playlist_name=target_playlist,
+            privacy=args.privacy,
+            publish_at=args.publish_at,
+            license_type=args.license,
+            location=args.location,
+            default_lang=args.default_language,
+            default_audio_lang=args.default_audio_language,
+            embeddable=args.embeddable,
+            cred_file=cred_path,
+            chunksize=args.chunksize,
+            open_link=args.open_link
         )
 
         if len(segments) > 1 and os.path.exists(seg_file):
             os.remove(seg_file)
 
     if meta["thumb_path"] and os.path.exists(meta["thumb_path"]):
-        os.remove(meta["thumb_path"])
+        try:
+            os.remove(meta["thumb_path"])
+        except OSError:
+            pass
 
     if is_symlink:
         if os.path.exists(work_path):
@@ -739,56 +754,44 @@ def process_upload(target_dir=IN_DIR):
 # ==========================================
 def parse_args():
     parser = argparse.ArgumentParser(
-    description=f"{__title__} (v{__version__})"
+    description=f"{__title__} v{__version__} (YouTube Data API v3)"
     )
 
-    # --- Betriebsmodi ---
+    # Version Parameter hinzufügen
     parser.add_argument(
-        "-a", "--auto",
-        metavar="PATH",
-        type=str,
-        nargs="?",
-        const=IN_DIR,
+        "-v", "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show program's version number and exit."
+    )
+
+    parser.add_argument(
+        "-a", "--auto", metavar="PATH", type=str, nargs="?", const=IN_DIR,
         help="Automated mode: processes directory/stream, handles FFmpeg splitting, "
              "metadata inheritance, and sequential uploads. (Default path: /videos/in)"
     )
     parser.add_argument(
-        "-D", "--daemon",
-        action="store_true",
+        "-D", "--daemon", action="store_true",
         help="Run as a background daemon process to continuously monitor target folders via inotify."
     )
+    parser.add_argument("files", nargs="*", help="Video file(s) to upload in manual mode.")
 
-    # --- Positionelles Argument für manuelle Uploads ---
-    parser.add_argument(
-        "files",
-        nargs="*",
-        help="Video file(s) to upload in manual mode."
-    )
-
-    # --- Metadaten Parameter (youtube-upload CLI Kompatibilität) ---
     parser.add_argument("-t", "--title", type=str, help="Video title")
     parser.add_argument("-c", "--category", type=str, help="Name or ID of video category")
     parser.add_argument("-d", "--description", type=str, help="Video description")
     parser.add_argument("--description-file", type=str, help="Path to file containing video description")
     parser.add_argument("--tags", type=str, help='Video tags (comma-separated: "tag1, tag2")')
     parser.add_argument(
-        "--privacy",
-        type=str,
-        choices=["public", "unlisted", "private"],
-        default=VIDEO_PRIVACY,
-        help=f"Privacy status (default: {VIDEO_PRIVACY})"
+        "--privacy", type=str, choices=["public", "unlisted", "private"],
+        default=VIDEO_PRIVACY, help=f"Privacy status (default: {VIDEO_PRIVACY})"
     )
     parser.add_argument("--publish-at", type=str, help="Publish date (ISO 8601: YYYY-MM-DDThh:mm:ss.sZ)")
     parser.add_argument(
-        "--license",
-        type=str,
-        choices=["youtube", "creativeCommon"],
-        default="youtube",
-        help='License for the video ("youtube" or "creativeCommon")'
+        "--license", type=str, choices=["youtube", "creativeCommon"],
+        default="youtube", help='License for the video ("youtube" or "creativeCommon")'
     )
     parser.add_argument(
-        "--location",
-        type=str,
+        "--location", type=str,
         help='Video location format: "latitude=VAL,longitude=VAL[,altitude=VAL]"'
     )
     parser.add_argument("--recording-date", type=str, help="Recording date (ISO 8601: YYYY-MM-DDThh:mm:ss.sZ)")
@@ -797,19 +800,16 @@ def parse_args():
     parser.add_argument("--thumbnail", type=str, help="Image file to use as video thumbnail (JPEG/PNG)")
     parser.add_argument("--playlist", type=str, help="Playlist title or ID (created if it does not exist)")
     parser.add_argument(
-        "--title-template",
-        type=str,
-        default="{title} [{n}/{total}]",
+        "--title-template", type=str, default="{title} [{n}/{total}]",
         help="Template for multiple videos (default: {title} [{n}/{total}])"
     )
+
+    # Korrigierte Boolean Action für Embedding
     parser.add_argument(
-        "--embeddable",
-        type=lambda x: (str(x).lower() in ['true', '1', 'yes']),
-        default=True,
-        help="Allow video embedding (true/false)"
+        "--embeddable", action=argparse.BooleanOptionalAction, default=True,
+        help="Allow video embedding"
     )
 
-    # --- Auth & System Parameter ---
     parser.add_argument("--client-secrets", type=str, help="Path to client secrets JSON file")
     parser.add_argument("--credentials-file", type=str, default=CREDENTIALS_FILE, help="Path to credentials storage JSON file")
     parser.add_argument("--auth-browser", action="store_true", help="Open GUI browser to authenticate if required")
@@ -818,7 +818,6 @@ def parse_args():
 
     args = parser.parse_args()
 
-    # Validierung der Betriebsmodi
     if not args.auto and not args.daemon and not args.files:
         parser.error("You must specify video file(s), use -a/--auto for batch processing, or -D/--daemon for background worker mode.")
 
@@ -829,20 +828,15 @@ def main():
     ensure_directories()
     args = parse_args()
 
-    # Auslesen der Descriptions-Datei falls angegeben
-    description_content = args.description
-    if args.description_file and os.path.exists(args.description_file):
-        with open(args.description_file, "r", encoding="utf-8") as df:
-            description_content = df.read()
-
     cred_path = args.credentials_file or args.client_secrets or CREDENTIALS_FILE
 
     # --- MODUS 1: DAEMON MODUS (-D) ---
     if args.daemon:
-        logging.info("Starte Python Upload Worker Daemon (Native HTTP)...")
+        target_dir = args.auto if args.auto else IN_DIR
+        logging.info(f"Starte Python Upload Worker Daemon auf Verzeichnis: {target_dir}...")
         while True:
             try:
-                process_upload(target_dir=IN_DIR)
+                process_upload(args, target_dir=target_dir)
             except Exception as e:
                 logging.error(f"Fehler bei Verarbeitung im Daemon Mode: {e}", exc_info=True)
                 cleanup_work_dir()
@@ -858,16 +852,21 @@ def main():
                 logging.info("Keine weiteren Videos im Zielordner gefunden. Batch-Run beendet.")
                 break
             try:
-                process_upload(target_dir=target_path)
+                process_upload(args, target_dir=target_path)
             except Exception as e:
                 logging.error(f"Fehler bei Batch-Verarbeitung von {found}: {e}", exc_info=True)
                 cleanup_work_dir()
-                time.sleep(5)
+                break
 
-    # --- MODUS 3: MANUELLER CLI-UPLOAD (Wie klasisches youtube-upload) ---
+    # --- MODUS 3: MANUELLER CLI-UPLOAD ---
     else:
         total_files = len(args.files)
         logging.info(f"Starte manuellen Upload für {total_files} Datei(en)...")
+
+        description_content = args.description
+        if args.description_file and os.path.exists(args.description_file):
+            with open(args.description_file, "r", encoding="utf-8") as df:
+                description_content = df.read()
 
         for idx, file_path in enumerate(args.files, start=1):
             if not os.path.exists(file_path):
@@ -876,7 +875,6 @@ def main():
 
             file_base = os.path.splitext(os.path.basename(file_path))[0]
             
-            # Titel aus Template oder Fallback generieren
             if args.title:
                 if total_files > 1:
                     title = args.title_template.format(title=args.title, n=idx, total=total_files)
