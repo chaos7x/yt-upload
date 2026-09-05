@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Wenn das Skript von außen (über das Volume) reingereicht wird, nutzen wir das
 if [ -f /app/yt-upload ]; then
