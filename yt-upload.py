@@ -250,18 +250,30 @@ def resolve_target_path(directory, filename):
     return unique_path(directory, filename)
 
 
-def cleanup_work_dir():
-    logging.warning("Bereinige WORK-Verzeichnis...")
-    if os.path.exists(WORK_DIR):
-        for item in os.listdir(WORK_DIR):
-            item_path = os.path.join(WORK_DIR, item)
-            try:
-                if os.path.isfile(item_path) or os.path.islink(item_path):
-                    os.unlink(item_path)
-                elif os.path.isdir(item_path):
-                    shutil.rmtree(item_path)
-            except Exception as e:
-                logging.error(f"Fehler beim Löschen von {item_path}: {e}")
+def cleanup_work_files(work_paths):
+    logging.warning("Bereinige Dateien des aktuellen Jobs im WORK-Verzeichnis...")
+    for item_path in work_paths:
+        try:
+            if os.path.isfile(item_path) or os.path.islink(item_path):
+                os.unlink(item_path)
+        except OSError as e:
+            logging.error(f"Fehler beim Löschen von {item_path}: {e}")
+
+
+def cleanup_generated_thumbnail(thumb_path):
+    if not thumb_path:
+        return
+
+    temp_dir = os.path.abspath(tempfile.gettempdir())
+    candidate = os.path.abspath(thumb_path)
+    if os.path.dirname(candidate) != temp_dir or not os.path.basename(candidate).startswith("yt_thumb_"):
+        return
+
+    try:
+        if os.path.isfile(candidate):
+            os.unlink(candidate)
+    except OSError as e:
+        logging.warning(f"Generiertes Thumbnail kann nicht gelöscht werden ({candidate}): {e}")
 
 
 def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
@@ -950,35 +962,38 @@ def upload_single_video(
             if not chunk_success:
                 raise RuntimeError("Max Retries beim Upload überschritten.")
 
-    if video_id:
-        if thumb_path and os.path.exists(thumb_path):
-            try:
-                logging.info(f"Lade benutzerdefiniertes Thumbnail hoch: {thumb_path}")
-                thumb_url = f"https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={video_id}"
-                with open(thumb_path, "rb") as tf:
-                    t_res = session.post(
-                        thumb_url,
-                        headers={
-                            "Authorization": f"Bearer {access_token}",
-                            "Content-Type": "image/jpeg"
-                        },
-                        data=tf,
-                        timeout=60
-                    )
-                if t_res.status_code in (200, 201):
-                    logging.info("Thumbnail erfolgreich gesetzt.")
-                else:
-                    logging.warning(f"Thumbnail-Upload fehlgeschlagen ({t_res.status_code}): {t_res.text}")
-            except Exception as te:
-                logging.warning(f"Fehler beim Thumbnail-Setzen: {te}")
+    try:
+        if video_id:
+            if thumb_path and os.path.exists(thumb_path):
+                try:
+                    logging.info(f"Lade benutzerdefiniertes Thumbnail hoch: {thumb_path}")
+                    thumb_url = f"https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={video_id}"
+                    with open(thumb_path, "rb") as tf:
+                        t_res = session.post(
+                            thumb_url,
+                            headers={
+                                "Authorization": f"Bearer {access_token}",
+                                "Content-Type": "image/jpeg"
+                            },
+                            data=tf,
+                            timeout=60
+                        )
+                    if t_res.status_code in (200, 201):
+                        logging.info("Thumbnail erfolgreich gesetzt.")
+                    else:
+                        logging.warning(f"Thumbnail-Upload fehlgeschlagen ({t_res.status_code}): {t_res.text}")
+                except Exception as te:
+                    logging.warning(f"Fehler beim Thumbnail-Setzen: {te}")
 
-        if playlist_name:
-            add_video_to_playlist(video_id, playlist_name, access_token, privacy)
+            if playlist_name:
+                add_video_to_playlist(video_id, playlist_name, access_token, privacy)
 
-        if open_link:
-            v_url = f"https://www.youtube.com/watch?v={video_id}"
-            logging.info(f"Öffne Browser-Link: {v_url}")
-            webbrowser.open(v_url)
+            if open_link:
+                v_url = f"https://www.youtube.com/watch?v={video_id}"
+                logging.info(f"Öffne Browser-Link: {v_url}")
+                webbrowser.open(v_url)
+    finally:
+        cleanup_generated_thumbnail(thumb_path)
 
     return video_id
 
@@ -1067,14 +1082,14 @@ def process_single_file(file_path, args=None):
             logging.error(f"Upload-Fehler bei Segment {seg}: {e}")
             target_corrupt = resolve_target_path(CORRUPT_DIR, filename)
             shutil.move(work_path, target_corrupt)
-            cleanup_work_dir()
+            cleanup_work_files(segments)
             return
 
     # Erfolgreich verarbeitet: In DONE-Verzeichnis verschieben
     target_done = resolve_target_path(DONE_DIR, filename)
     logging.info(f"Verarbeitung erfolgreich. Verschiebe Original nach DONE: {target_done}")
     shutil.move(work_path, target_done)
-    cleanup_work_dir()
+    cleanup_work_files(segments)
 
 
 # ==========================================
