@@ -5,14 +5,19 @@ oauth/
 tests/
 app/
 
+#Github Zeug
+.github/agents/
+
 # Backup- und Sicherungsdateien ausschließen
 *.sav
 *.bak
 *.new
-
+*.log
+*.diff
 # Python Bytecode und Cache ausschließen
 __pycache__/
 *.pyc
 docker-compose.override.yaml
 # Environminet Datei ausschließen
 .env
+
