@@ -44,7 +44,7 @@ ENV HOME=/app
 # ------------------------------------------
 # LAYER 3: Daten- & Log-Verzeichnisse anlegen
 # ------------------------------------------
-RUN mkdir /videos /log /etc/yt-upload/ && chmod 777 /videos /log
+RUN mkdir -p /videos /log /etc/yt-upload/conf.d && chmod 777 /videos /log
 
 # ------------------------------------------
 # LAYER 4: Lokale Skripte & Configs kopieren
@@ -53,7 +53,7 @@ COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chmod=755 yt-upload.py /usr/local/bin/yt-upload
 COPY --chmod=755 get_token.py /usr/local/bin/get_token
 COPY bashrc /etc/global.bashrc
-COPY upload.conf.example /etc/yt-upload/
+COPY upload.conf.example /etc/yt-upload/upload.conf
 
 # ------------------------------------------
 # LAYER 5: Symlinks anlegen
