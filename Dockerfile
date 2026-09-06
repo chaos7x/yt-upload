@@ -49,17 +49,16 @@ RUN mkdir /videos /log /etc/yt-upload/ && chmod 777 /videos /log
 # ------------------------------------------
 # LAYER 4: Lokale Skripte & Configs kopieren
 # ------------------------------------------
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY yt-upload.py /usr/local/bin/yt-upload
-COPY get_token.py /usr/local/bin/get_token
+COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=755 yt-upload.py /usr/local/bin/yt-upload
+COPY --chmod=755 get_token.py /usr/local/bin/get_token
 COPY bashrc /etc/global.bashrc
 COPY upload.conf.example /etc/yt-upload/
 
 # ------------------------------------------
-# LAYER 5: Rechte setzen & Symlinks anlegen
+# LAYER 5: Symlinks anlegen
 # ------------------------------------------
-RUN chmod +x /usr/local/bin/yt-upload /usr/local/bin/entrypoint.sh /usr/local/bin/get_token \
-    && ln -s /etc/global.bashrc /tmp/.bashrc \
+RUN ln -s /etc/global.bashrc /tmp/.bashrc \
     && ln -s /etc/global.bashrc /app/.bashrc
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
