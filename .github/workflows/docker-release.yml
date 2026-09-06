@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - 'v*.*.*' # Startet automatisch, wenn ein Tag wie v1.0.0 oder v1.2.3 gepusht wird
-    branches:
-      - main     # Registriert Pushes auf main, um sie im Skript gezielt zu überspringen
     paths-ignore:
       - '.github/workflows/**'
       - '**.md'
