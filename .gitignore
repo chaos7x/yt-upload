@@ -11,6 +11,8 @@ app/
 # Backup- und Sicherungsdateien ausschließen
 *.sav
 *.bak
+client_secrets.json
+youtube-upload-credentials.json
 *.new
 *.log
 *.diff
