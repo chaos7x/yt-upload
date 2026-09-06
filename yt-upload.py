@@ -46,6 +46,7 @@ import time
 import unicodedata
 import webbrowser
 import requests
+from datetime import datetime, timezone
 
 if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
     os.environ['DEBUG'] = '1'
@@ -381,6 +382,14 @@ def wait_for_input(target_dir=IN_DIR):
 # ==========================================
 # METADATEN & THUMBNAIL
 # ==========================================
+def truncate_title(title: str, max_length: int = 100) -> str:
+    if not title:
+        return ""
+    if len(title) <= max_length:
+        return title
+    return title[: max_length - 3].rstrip() + "..."
+
+
 def get_valid_category_id(category_input):
     """Mappt Textgenres oder Namen auf offizielle YouTube Category IDs."""
     if not category_input:
@@ -429,6 +438,23 @@ def get_valid_category_id(category_input):
             return val
 
     return "22"
+
+
+def normalize_recording_date(value):
+    if not value:
+        return None
+
+    value = str(value).strip()
+
+    if re.fullmatch(r"\d{8}", value):
+        parsed = datetime.strptime(value, "%Y%m%d")
+        return parsed.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+        return parsed.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
+    return value
 
 
 def sanitize_text(text):
@@ -742,7 +768,12 @@ def upload_single_video(
 ):
     # YouTube API Limits einhalten (Titel max 100, Beschreibung max 5000 Zeichen)
     if title:
-        title = title[:100]
+        title = truncate_title(sanitize_text(title), max_length=100)
+    else:
+        # Fallback auf Dateinamen, falls gar kein Titel übergeben wurde
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        title = truncate_title(sanitize_text(base_name), max_length=100)
+
     if desc:
         desc = desc[:5000]
 
@@ -765,18 +796,41 @@ def upload_single_video(
         logging.info(f"Chunksize angepasst auf Vielfaches von 256 KiB: {chunksize} -> {adjusted_chunksize} Bytes")
         chunksize = adjusted_chunksize
 
-    tags_list = []
+# Safe Tags Sanitation & Limits (max 100 Zeichen pro Tag, max 400 Zeichen gesamt)
+    clean_tags = []
     if isinstance(tags, list):
         tags_list = tags
     elif isinstance(tags, str) and tags:
         tags_list = [t.strip() for t in tags.split(",") if t.strip()]
+    else:
+        tags_list = []
+
+    for tag in tags_list:
+        sanitized_tag = sanitize_text(str(tag)).strip()
+        if sanitized_tag and len(sanitized_tag) <= 100:
+            clean_tags.append(sanitized_tag)
+    
+    final_tags = []
+    current_length = 0
+    for t in clean_tags:
+        if current_length + len(t) + 1 <= 400:
+            final_tags.append(t)
+            current_length += len(t) + 1
+
+    # Safe Category fallback
+    cat_id = get_valid_category_id(category) if 'get_valid_category_id' in globals() else category
+    if not cat_id:
+        cat_id = "22"  # Standard YouTube Kategorie: People & Blogs
 
     snippet = {
         "title": title,
         "description": desc or "",
-        "categoryId": get_valid_category_id(category),
-        "tags": tags_list,
+        "categoryId": str(cat_id),
     }
+    
+    if final_tags:
+        snippet["tags"] = final_tags
+
     if default_lang:
         snippet["defaultLanguage"] = default_lang
     if default_audio_lang:
@@ -796,12 +850,17 @@ def upload_single_video(
     }
 
     if rec_date:
+        rec_date = normalize_recording_date(rec_date)
         metadata_body["recordingDetails"] = {"recordingDate": rec_date}
+
 
     parsed_loc = parse_location(location) if isinstance(location, str) else location
     if parsed_loc:
         metadata_body["recordingDetails"] = metadata_body.get("recordingDetails", {})
         metadata_body["recordingDetails"]["location"] = parsed_loc
+
+    # DEBUG LOGGING: Gibt das exakte JSON-Payload im Log aus
+    logging.info(f"PAYLOAD DEBUG: {json.dumps(metadata_body, ensure_ascii=False)}")
 
     parts = "snippet,status"
     if "recordingDetails" in metadata_body:
