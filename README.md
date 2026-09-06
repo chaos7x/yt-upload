@@ -1,6 +1,6 @@
 # yt-upload 📹☁️
 
-`yt-upload` (v2.0.0) ist eine Python- und Docker-basierte Automatisierungslösung zur ereignisbasierten Überwachung von Video-Verzeichnissen und zum automatischen Upload auf YouTube via native REST API v3, FFmpeg und inotify[cite: 5, 8, 14].
+`yt-upload` (v2.0.0) ist eine Python- und Docker-basierte Automatisierungslösung zur ereignisbasierten Überwachung von Video-Verzeichnissen und zum automatischen Upload auf YouTube via native REST API v3, FFmpeg und inotify.
 
 Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten sowie Cover-Thumbnails, zerlegt Videos bei Bedarf verlustfrei in Segmente (z. B. bei Dateien > 10 Stunden) und ordnet sie dynamisch Playlists zu.
 
@@ -8,12 +8,12 @@ Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten 
 
 ## ✨ Features
 
-* **Direkte HTTP REST API v2.0.0:** Verwendet eine eigene native Implementierung für Resumable Chunk-Uploads ohne schwerfällige externe API-Wrapper.
+* **Direkte HTTP REST API v3:** Native Implementierung für Resumable Chunk-Uploads ohne schwerfällige externe API-Wrapper.
 * **Inotify-Ordnerüberwachung:** Überwacht `/videos/in` im Dämon-Modus (`-D`) in Echtzeit auf Dateiveränderungen (`.mp4`, `.mkv`, `.mov`, `.m4v`) inklusive Polling-Fallback.
 * **Drei flexible Betriebsmodi:**
   1. **Dämon-Modus (`-D` / `--daemon`):** Dauerhafter Hintergrunddienst zur automatischen Überwachung.
   2. **Auto-Batch (`-a` / `--auto`):** Einmaliges Abarbeiten eines Verzeichnisses mit anschließendem Beenden.
-  3. **Manuell (CLI):** Upload einzelner Videodateien mit voller Parameterkontrolle analog zu klassischen CLI-Uploadern.
+  3. **Manuell (CLI):** Upload einzelner Videodateien mit voller Parameterkontrolle.
 * **Metadaten- & Thumbnail-Extraktion:** Liest Titel, Beschreibung, PURL, Genre, Aufnahmedatum und Artist via `ffprobe` aus. Extrahiert automatisch Thumbnails aus MKV-Attachments, MP4-Covern oder generiert ein Frame-Thumbnail.
 * **Verlustfreies FFmpeg-Splitting:** Zertrennt Videos mit einer Laufzeit von über 10 Stunden (36.000 Sekunden) automatisch und ohne Qualitätsverlust (`-c copy`) in durchnummerierte Segmente.
 * **Dynamische Playlist-Verwaltung:** Erstellt und verknüpft Ziel-Playlists automatisch (z. B. auf Basis des `ARTIST`-Tags via `ENABLE_DYNAMIC_PLAYLISTS`).
@@ -27,7 +27,8 @@ Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten 
 Erstelle die benötigten Ordnerstrukturen auf deinem Host-System:
 
 ```bash
-mkdir -p videos/in videos/work videos/done videos/corrupt log oauth
+mkdir -p videos/in videos/work videos/done videos/corrupt log oauth etc/yt-upload/conf.d
+Erstelle die benötigten Ordnerstrukturen auf deinem Host-System:
 ```
 Hinterlege deine Google OAuth Secrets unter oauth/client_secrets.json. Eine Beispielvorlage für die Datei:
 ```json
@@ -65,6 +66,7 @@ docker run -d \
   -v $(pwd)/oauth:/app/oauth:rw \
   -v $(pwd)/videos:/videos:rw \
   -v $(pwd)/log:/log:rw \
+  -v $(pwd)/config:/etc/yt-upload:rw
   ghcr.io/chaos7x/yt-upload:latest
 ```
 📦 Docker Compose Integration
@@ -90,6 +92,7 @@ services:
       - ./oauth:/app/oauth
       - ./videos:/videos
       - ./log:/log
+      - ./config:/etc/yt-upload
 
     tty: true
     stdin_open: true
