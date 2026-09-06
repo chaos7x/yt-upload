@@ -14,12 +14,11 @@
 from datetime import datetime, timezone, timedelta
 import json
 import os
+import secrets
 import sys
+from urllib.parse import parse_qs, urlencode, urlparse
 
-# WICHTIG: Muss ganz oben stehen, BEVOR google_auth_oauthlib importiert wird!
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-
-from google_auth_oauthlib.flow import InstalledAppFlow
+import requests
 
 CLIENT_SECRETS_FILE = "/app/oauth/client_secrets.json"
 OUTPUT_CREDENTIALS_FILE = "/app/oauth/youtube-upload-credentials.json"
@@ -28,56 +27,103 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube"
 ]
 
+
+def load_client_secrets():
+    with open(CLIENT_SECRETS_FILE, "r", encoding="utf-8") as secrets_file:
+        data = json.load(secrets_file)
+
+    client_data = data.get("installed") or data.get("web") or data
+    client_id = client_data.get("client_id")
+    client_secret = client_data.get("client_secret")
+    auth_uri = client_data.get("auth_uri", "https://accounts.google.com/o/oauth2/v2/auth")
+    token_uri = client_data.get("token_uri", "https://oauth2.googleapis.com/token")
+
+    if not client_id or not client_secret:
+        raise ValueError("client_id oder client_secret fehlt in der Client-Secrets-Datei.")
+
+    return client_id, client_secret, auth_uri, token_uri
+
+
+def get_authorization_code(auth_uri, token_uri, client_id, redirect_uri, client_secret):
+    state = secrets.token_urlsafe(32)
+    auth_params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": " ".join(SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    }
+    auth_url = f"{auth_uri}?{urlencode(auth_params)}"
+
+    print("\n1. Öffne diesen Link im Browser:\n")
+    print(auth_url)
+    print("\n----------------------------------------------------------------")
+    print("2. Logge dich ein und erlaube den Zugriff.")
+    print("3. Nach dem Klick auf 'Zulassen' bricht der Browser ab (Seite nicht gefunden).")
+    print("4. Kopiere die KOMPLETTE URL aus der Adresszeile.")
+    print("----------------------------------------------------------------\n")
+
+    redirect_response = input("Füge die kopierte URL hier ein: ").strip()
+    query = parse_qs(urlparse(redirect_response).query)
+
+    if query.get("error"):
+        raise RuntimeError(f"Google OAuth wurde abgebrochen: {query['error'][0]}")
+    if query.get("state", [None])[0] != state:
+        raise RuntimeError("Ungültiger OAuth-State. Bitte den Vorgang erneut starten.")
+    if not query.get("code", [None])[0]:
+        raise RuntimeError("Keine OAuth-Autorisierung in der kopierten URL gefunden.")
+
+    token_response = requests.post(
+        token_uri,
+        data={
+            "code": query["code"][0],
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        },
+        timeout=30,
+    )
+    if token_response.status_code != 200:
+        raise RuntimeError(f"Token-Austausch fehlgeschlagen: {token_response.text}")
+
+    return token_response.json()
+
 def main():
     try:
         # Zielverzeichnis automatisch anlegen, falls es noch nicht existiert
         os.makedirs(os.path.dirname(OUTPUT_CREDENTIALS_FILE), exist_ok=True)
 
-        # Wir nutzen hier den Konsolen-Flow (run_local_server wird umgangen)
-        flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES)
-        
-        # redirect_uri auf localhost setzen, aber wir holen den Code manuell aus der URL!
-        flow.redirect_uri = "http://localhost:8080/"
-        
-        auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
-        
-        print("\n1. Öffne diesen Link im Browser:\n")
-        print(auth_url)
-        print("\n----------------------------------------------------------------")
-        print("2. Logge dich ein und erlaube den Zugriff.")
-        print("3. Nach dem Klick auf 'Zulassen' bricht der Browser ab (Seite nicht gefunden).")
-        print("4. Kopiere die KOMPLETTE URL aus der Adresszeile des Browsers (beginnt mit http://localhost:8080/?code=...)")
-        print("----------------------------------------------------------------\n")
-        
-        redirect_response = input("Füge die kopierte URL hier ein: ").strip()
-        
-        # Holt sich den Token aus der URL heraus
-        flow.fetch_token(authorization_response=redirect_response)
-        credentials = flow.credentials
+        client_id, client_secret, auth_uri, token_uri = load_client_secrets()
+        redirect_uri = "http://localhost:8080/"
+        token_response = get_authorization_code(auth_uri, token_uri, client_id, redirect_uri, client_secret)
+        refresh_token = token_response.get("refresh_token")
+        if not refresh_token:
+            raise RuntimeError("Google hat keinen Refresh-Token geliefert. Bitte den OAuth-Zugriff erneut erlauben.")
         
         # Datumsformatierung mit Fallback, falls credentials.expiry None ist
-        if credentials.expiry:
-            expiry_str = credentials.expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
-        else:
-            expiry_str = (datetime.now(timezone.utc) + timedelta(seconds=3600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        expires_in = int(token_response.get("expires_in", 3600))
+        expiry_str = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         legacy_credentials = {
-            "access_token": credentials.token,
-            "client_id": credentials.client_id,
-            "client_secret": credentials.client_secret,
-            "refresh_token": credentials.refresh_token,
+            "access_token": token_response.get("access_token"),
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
             "token_expiry": expiry_str,
-            "token_uri": credentials.token_uri,
+            "token_uri": token_uri,
             "user_agent": None,
             "revoke_uri": "https://oauth2.googleapis.com/revoke",
             "id_token": None,
             "id_token_jwt": None,
             "token_response": {
-                "access_token": credentials.token,
-                "expires_in": 3599,
-                "refresh_token": credentials.refresh_token,
+                "access_token": token_response.get("access_token"),
+                "expires_in": expires_in,
+                "refresh_token": refresh_token,
                 "scope": " ".join(SCOPES),
-                "token_type": "Bearer"
+                "token_type": token_response.get("token_type", "Bearer")
             },
             "scopes": SCOPES,
             "token_info_uri": "https://oauth2.googleapis.com/tokeninfo",
@@ -88,6 +134,7 @@ def main():
         
         with open(OUTPUT_CREDENTIALS_FILE, "w") as f:
             json.dump(legacy_credentials, f, indent=2)
+        os.chmod(OUTPUT_CREDENTIALS_FILE, 0o600)
             
         print(f"\n[ERFOLG] {OUTPUT_CREDENTIALS_FILE} wurde erfolgreich erstellt!")
 

@@ -1,0 +1,58 @@
+# ==============================================================================
+# YouTube Video Uploader Configuration Example
+# Pfad: /etc/yt-upload/upload.conf oder conf.d/*.conf
+# ==============================================================================
+
+[paths]
+# Verzeichnis für neu eingehende Videodateien
+#in_dir = /videos/in
+
+# Temporäres Arbeitsverzeichnis während der Verarbeitung/Splittings
+#work_dir = /videos/work
+
+# Zielverzeichnis für erfolgreich hochgeladene und archivierte Dateien
+#done_dir = /videos/done
+
+# Zielverzeichnis für fehlerhafte oder unvollständige Dateien
+#corrupt_dir = /videos/corrupt
+
+# Pfad zur zentralen Logdatei
+#log_file = /log/upload.log
+
+# Pfad zu den Google OAuth Credentials
+#credentials_file = /app/oauth/youtube-upload-credentials.json
+
+
+[settings]
+# Erstellt/Ermittelt automatisch Playlists basierend auf dem 'ARTIST'-Tag (true/false)
+#enable_dynamic_playlists = false
+
+# Standard-Sichtbarkeit für hochgeladene Videos (public, private, unlisted)
+#privacy_status = unlisted
+
+# Standard-Kategorie (Name oder YouTube Category ID, z.B. 22)
+#default_category = Entertainment
+
+# Standardsprache für Titel, Beschreibung und Audio (ISO 639-1 Code)
+#default_language = de
+
+# Einbetten der Videos auf externen Websites erlauben (true/false)
+#allow_embedding = true
+
+# Standard-Beschreibungstext, falls keine Metadaten/CLI-Argumente vorhanden sind
+#default_description = Automatischer Upload via Script.
+
+# Standard-Tags (kommagetrennt)
+#default_tags = Upload, Video
+
+# Automatische Thumbnail-Generierung via FFmpeg aktivieren (true/false)
+#auto_generate_thumbnail = true
+
+# Mindestintervall in Sekunden für den Auto-Thumbnail Frame-Grab
+#auto_thumb_min_sec = 15
+
+# Maximalintervall in Sekunden für den Auto-Thumbnail Frame-Grab
+#auto_thumb_max_sec = 120
+
+# Bei Namenskonflikten in DONE/CORRUPT Dateien überschreiben statt umzubenennen (true/false)
+#allow_overwrite = true
