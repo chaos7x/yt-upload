@@ -33,6 +33,7 @@ import argparse
 import configparser
 import glob
 import hashlib
+from importlib import metadata
 import json
 import logging
 import os
@@ -481,17 +482,22 @@ def extract_metadata_and_thumb(file_path):
         probe_data = json.loads(res.stdout)
 
         format_info = probe_data.get("format", {})
-        tags = {k.upper(): v for k, v in format_info.get("tags", {}).items()}
+        # Wandelt alle Tag-Schlüssel zuverlässig in Kleinschreibung um
+        tags = {str(k).lower(): v for k, v in format_info.get("tags", {}).items()}
 
         if "duration" in format_info:
             metadata["duration"] = int(float(format_info["duration"]))
 
-        metadata["title"] = sanitize_text(tags.get("TITLE"))
-        metadata["description"] = tags.get("DESCRIPTION") or tags.get("COMMENT")
-        metadata["purl"] = tags.get("PURL")
-        metadata["genre"] = tags.get("GENRE")
-        metadata["date"] = tags.get("DATE")
-        metadata["artist"] = sanitize_text(tags.get("ARTIST") or tags.get("ALBUM_ARTIST"))
+        # 'title' statt 'TITLE' abfragen
+        raw_title = tags.get("title")
+        if raw_title:
+            metadata["title"] = truncate_title(sanitize_text(raw_title), max_length=100)
+
+        metadata["description"] = tags.get("description") or tags.get("comment")
+        metadata["purl"] = tags.get("purl")
+        metadata["genre"] = tags.get("genre")
+        metadata["date"] = tags.get("date")
+        metadata["artist"] = sanitize_text(tags.get("artist") or tags.get("album_artist"))
 
     except Exception as e:
         logging.error(f"Fehler beim Auslesen der Metadaten via FFprobe: {e}")
