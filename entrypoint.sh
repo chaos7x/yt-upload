@@ -1,12 +1,17 @@
 #!/bin/sh
 
+# Docker startet den Recorder standardmäßig im Daemon-Modus.
+if [ "$#" -eq 0 ]; then
+    set -- -D
+fi
+
 # Wenn das Skript von außen (über das Volume) reingereicht wird, nutzen wir das
 if [ -f /app/yt-upload ]; then
     echo ">>> Using external yt-upload from volume..."
     chmod +x /app/yt-upload 2>/dev/null || true
-    exec /app/yt-upload -D
+    exec /app/yt-upload "$@"
 else
     # Andernfalls greifen wir auf das im Image eingebaute Skript zurück
     echo ">>> Using internal /usr/local/bin/yt-upload from image..."
-    exec /usr/local/bin/yt-upload -D
+    exec /usr/local/bin/yt-upload "$@"
 fi
