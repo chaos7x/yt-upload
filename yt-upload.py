@@ -1098,7 +1098,7 @@ def process_single_file(file_path, args=None):
 # ==========================================
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="YouTube Video Uploader & Auto-Archiver CLI v2.0.0",
+        description=f"{__title__} v{__version__}",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
@@ -1109,6 +1109,7 @@ def parse_arguments():
     parser.add_argument("-t", "--title", help="Video-Titel (Standard: Metadaten/Dateiname)")
     parser.add_argument("-d", "--description", help="Video-Beschreibung")
     parser.add_argument("-c", "--category", help="Kategorie ID oder Name (z.B. Entertainment, Gaming, 22)")
+    parser.add_argument("-V", "--Version", action="version", version=f"{__title__} v{__version__}")
     parser.add_argument("--tags", help="Kommagetrennte Liste von Tags")
     parser.add_argument("--privacy", choices=["public", "private", "unlisted"], default=VIDEO_PRIVACY, help="Sichtbarkeit")
 
