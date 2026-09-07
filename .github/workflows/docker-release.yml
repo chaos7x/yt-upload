@@ -3,7 +3,7 @@ name: Build and Push Docker Image
 on:
   push:
     tags:
-      - 'v*.*.*' # Startet automatisch, wenn ein Tag wie v1.0.0 oder v1.2.3 gepusht wird
+      - 'v*.*.*'
     paths-ignore:
       - '.github/workflows/**'
       - '**.md'
@@ -19,23 +19,24 @@ on:
         default: ''
 
 env:
-  REGISTRY: ghcr.io
+  REGISTRY_GHCR: ghcr.io
+  REGISTRY_DOCKERHUB: docker.io
   IMAGE_NAME: ${{ github.repository }}
+  DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/yt-upload
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # Erlaubt das Erstellen von Releases
-      packages: write   # Erlaubt das Pushen in die GitHub Container Registry
+      contents: write
+      packages: write
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Zwingend nötig, um alle Tags für das Version-Bumping zu lesen
+          fetch-depth: 0
 
-      # Step: Version ermitteln ODER abbrechen, falls Push ohne Tag oder im Cron keine Ändung vorliegt
       - name: Version berechnen & Upstream-Änderungen prüfen
         id: bump_version
         run: |
@@ -61,11 +62,43 @@ jobs:
             exit 0
           fi
 
-          # 3. Upstream-Hashes für Cache-Check holen (ohne das alte tokland-Repo)
-          DEBIAN_DIGEST=$(docker manifest inspect debian:trixie-slim 2>/dev/null | grep -m 1 "digest" | awk -F '"' '{print $4}' || echo "")
-          FFMPEG_DIGEST=$(docker manifest inspect mwader/static-ffmpeg:7.1 2>/dev/null | grep -m 1 "digest" | awk -F '"' '{print $4}' || echo "")
+          # 3. Upstream-Digests via Docker Hub API abfragen
+          echo "Frage Debian trixie-slim Digest von Docker Hub ab..."
+          DEBIAN_DIGEST=$(curl -s "https://registry.hub.docker.com/v2/library/debian/manifests/trixie-slim" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            2>/dev/null | grep -o '"digest":"sha256:[a-f0-9]*"' | head -1 | awk -F '"' '{print $4}' || echo "")
+          
+          if [ -z "$DEBIAN_DIGEST" ]; then
+            DEBIAN_DIGEST=$(curl -s "https://registry.hub.docker.com/v2/library/debian/manifests/trixie-slim" \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              2>/dev/null | jq -r '.config.digest' 2>/dev/null || echo "")
+          fi
+          
+          if [ -z "$DEBIAN_DIGEST" ]; then
+            echo "WARNUNG: Konnte Debian Digest nicht abrufen!"
+            DEBIAN_DIGEST="unknown"
+          fi
+          
+          echo "Debian trixie-slim Digest: $DEBIAN_DIGEST"
 
-          # Fingerprint NUR auf Upstream-Quellen basieren (nicht auf HEAD_COMMIT)
+          echo "Frage mwader/static-ffmpeg:latest Digest von Docker Hub ab..."
+          FFMPEG_DIGEST=$(curl -s "https://registry.hub.docker.com/v2/mwader/static-ffmpeg/manifests/latest" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            2>/dev/null | grep -o '"digest":"sha256:[a-f0-9]*"' | head -1 | awk -F '"' '{print $4}' || echo "")
+          
+          if [ -z "$FFMPEG_DIGEST" ]; then
+            FFMPEG_DIGEST=$(curl -s "https://registry.hub.docker.com/v2/mwader/static-ffmpeg/manifests/latest" \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              2>/dev/null | jq -r '.config.digest' 2>/dev/null || echo "")
+          fi
+          
+          if [ -z "$FFMPEG_DIGEST" ]; then
+            echo "WARNUNG: Konnte FFmpeg Digest nicht abrufen!"
+            FFMPEG_DIGEST="unknown"
+          fi
+          
+          echo "FFmpeg mwader/static-ffmpeg:latest Digest: $FFMPEG_DIGEST"
+
           CURRENT_FINGERPRINT=$(echo "${DEBIAN_DIGEST}:${FFMPEG_DIGEST}" | sha256sum | awk '{print $1}')
           echo "Aktueller System-Fingerprint: $CURRENT_FINGERPRINT"
 
@@ -111,21 +144,30 @@ jobs:
         if: steps.bump_version.outputs.skip_build != 'true'
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ${{ env.REGISTRY_GHCR }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in zu Docker Hub
+        if: steps.bump_version.outputs.skip_build != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_DOCKERHUB }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker Metadaten extrahieren
         if: steps.bump_version.outputs.skip_build != 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: |
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE }}
           tags: |
             type=semver,pattern={{version}},value=${{ steps.bump_version.outputs.version }}
             type=raw,value=latest
 
-      # NÖTIG FÜR MULTI-ARCH: QEMU Emulation aktivieren
       - name: Set up QEMU
         if: steps.bump_version.outputs.skip_build != 'true'
         uses: docker/setup-qemu-action@v3
@@ -150,7 +192,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Tag & Release auch auf GitHub für automatische Cron-Builds erstellen
       - name: GitHub Release & Git-Tag erstellen
         if: steps.bump_version.outputs.skip_build != 'true'
         uses: softprops/action-gh-release@v2
@@ -159,6 +200,14 @@ jobs:
           name: Release ${{ steps.bump_version.outputs.version }}
           body: |
             Automated Release ${{ steps.bump_version.outputs.version }}
+            
+            Docker Hub: ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE }}
+            GitHub Container Registry: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
+            
+            Upstream Dependencies:
+            - Debian: trixie-slim
+            - FFmpeg: mwader/static-ffmpeg:latest
+            
             Fingerprint: ${{ steps.bump_version.outputs.fingerprint }}
           generate_release_notes: true
         env:
