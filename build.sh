@@ -1,22 +1,44 @@
 #!/usr/bin/env bash
 set -e
 
-# Argumente intelligent parsen:
-# - Keine Argumente: VERSION="dev", VARIANT=""
-# - Ein Argument "pyimg": VERSION="dev", VARIANT="pyimg"
-# - Ein Argument (sonstiges): VERSION="$1", VARIANT=""
-# - Zwei Argumente: VERSION="$1", VARIANT="$2"
 VERSION="dev"
 VARIANT=""
 
-if [ -n "${1:-}" ]; then
-    if [ "$1" = "pyimg" ]; then
-        VARIANT="pyimg"
-    else
+# Bekannte Varianten definieren (für die automatische Erkennung bei nur 1 Argument)
+KNOWN_VARIANTS=("pyimg" "alpine")
+
+is_known_variant() {
+    local target="$1"
+    for v in "${KNOWN_VARIANTS[@]}"; do
+        if [ "$v" = "$target" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+case "$#" in
+    0)
+        # Keine Argumente -> Defaults bleiben (VERSION="dev", VARIANT="")
+        ;;
+    1)
+        # Ein Argument: Prüfen, ob es eine Variante oder eine Version ist
+        if is_known_variant "$1"; then
+            VARIANT="$1"
+        else
+            VERSION="$1"
+        fi
+        ;;
+    2)
+        # Zwei Argumente: Klar definiert als Version und Variante
         VERSION="$1"
-        VARIANT="${2:-}"
-    fi
-fi
+        VARIANT="$2"
+        ;;
+    *)
+        echo "❌ Zu viele Argumente. Verwendung: $0 [VERSION] [VARIANT]" >&2
+        exit 1
+        ;;
+esac
 
 IMAGE_NAME="yt-upload"
 BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -40,7 +62,6 @@ docker build -f "$DOCKERFILE" \
 
 echo "🎉 Build erfolgreich abgeschlossen!"
 
-# Prüfen, ob die Override-Datei für lokale Dev-Builds vorhanden ist
 if [ -f "docker-compose.override.yml" ] || [ -f "docker-compose.override.yaml" ]; then
   echo "💡 'docker compose up -d' nutzt jetzt deine lokale 'docker-compose.override.yml'."
 else

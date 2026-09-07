@@ -1,0 +1,63 @@
+# ==========================================
+# STUFE 0: Statische Binaries bereitstellen
+# ==========================================
+# Holt die offiziellen, statisch gelinkten FFmpeg- und FFprobe-Binaries von mwader
+FROM mwader/static-ffmpeg:latest AS ffmpeg-binaries
+
+# ==========================================
+# STUFE 1: FINAL STAGE (Schlankes Laufzeit-Image)
+# ==========================================
+FROM alpine:3
+
+ARG VERSION
+ARG BUILD_DATE
+
+LABEL version="${VERSION}"
+LABEL build_date="${BUILD_DATE}"
+LABEL maintainer="Chaos7x"
+LABEL purpose="YouTube upload automation with ffmpeg + python"
+
+# ------------------------------------------
+# LAYER 1: FFmpeg Binaries aus STUFE 0 kopieren
+# ------------------------------------------
+COPY --from=ffmpeg-binaries /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
+
+# ------------------------------------------
+# LAYER 2: System-Pakete & Python-Bibliotheken in EINEM Rutsch installieren + Aufräumen
+# ------------------------------------------
+# Installiert Python 3, requests, inotify, ExifTool, Midnight Commander (mc) 
+# sowie ca-certificates direkt über den Paketmanager.
+RUN apk add --no-cache \
+    python3 \
+    py3-requests \
+    py3-inotify \
+    libcom_err \
+    mc \
+    ca-certificates
+
+# Arbeitsverzeichnis & Home-Variable setzen
+WORKDIR /app
+ENV HOME=/app
+
+# ------------------------------------------
+# LAYER 3: Daten- & Log-Verzeichnisse anlegen
+# ------------------------------------------
+RUN mkdir -p /videos /log /etc/yt-upload/conf.d && chmod 777 /videos /log
+
+# ------------------------------------------
+# LAYER 4: Lokale Skripte & Configs kopieren
+# ------------------------------------------
+COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=755 yt-upload.py /usr/local/bin/yt-upload
+COPY --chmod=755 get_token.py /usr/local/bin/get_token
+COPY bashrc /etc/global.bashrc
+COPY upload.conf.example /etc/yt-upload/upload.conf
+
+# ------------------------------------------
+# LAYER 5: Symlinks anlegen
+# ------------------------------------------
+RUN ln -s /etc/global.bashrc /tmp/.bashrc \
+    && ln -s /etc/global.bashrc /app/.bashrc
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
