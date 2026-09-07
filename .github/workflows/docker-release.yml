@@ -65,8 +65,8 @@ jobs:
           DEBIAN_DIGEST=$(docker manifest inspect debian:trixie-slim 2>/dev/null | grep -m 1 "digest" | awk -F '"' '{print $4}' || echo "")
           FFMPEG_DIGEST=$(docker manifest inspect mwader/static-ffmpeg:7.1 2>/dev/null | grep -m 1 "digest" | awk -F '"' '{print $4}' || echo "")
 
-          # Kombinierten Fingerprint aller relevanten Quellen erstellen
-          CURRENT_FINGERPRINT=$(echo "${HEAD_COMMIT}:${DEBIAN_DIGEST}:${FFMPEG_DIGEST}" | sha256sum | awk '{print $1}')
+          # Fingerprint NUR auf Upstream-Quellen basieren (nicht auf HEAD_COMMIT)
+          CURRENT_FINGERPRINT=$(echo "${DEBIAN_DIGEST}:${FFMPEG_DIGEST}" | sha256sum | awk '{print $1}')
           echo "Aktueller System-Fingerprint: $CURRENT_FINGERPRINT"
 
           # 4. Bei Cronjob prüfen, ob sich der Fingerprint seit dem letzten Release geändert hat
@@ -78,7 +78,7 @@ jobs:
             echo "Letzter Release-Fingerprint: $LAST_FINGERPRINT"
 
             if [ -n "$LAST_FINGERPRINT" ] && [ "$CURRENT_FINGERPRINT" = "$LAST_FINGERPRINT" ]; then
-              echo "Keine Änderungen in eigenem Code oder Upstream-Quellen (Debian/FFmpeg). Abbruch."
+              echo "Keine Änderungen in Upstream-Quellen (Debian/FFmpeg). Abbruch."
               echo "skip_build=true" >> $GITHUB_OUTPUT
             fi
           fi
