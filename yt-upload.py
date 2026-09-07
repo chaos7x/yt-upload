@@ -250,8 +250,9 @@ def resolve_target_path(directory, filename):
     return unique_path(directory, filename)
 
 
-def cleanup_work_files(work_paths):
-    logging.warning("Bereinige Dateien des aktuellen Jobs im WORK-Verzeichnis...")
+def cleanup_work_files(work_paths, is_error=False):
+    log_func = logging.warning if is_error else logging.info
+    log_func("Bereinige Dateien des aktuellen Jobs im WORK-Verzeichnis...")
     for item_path in work_paths:
         try:
             if os.path.isfile(item_path) or os.path.islink(item_path):
@@ -1082,7 +1083,7 @@ def process_single_file(file_path, args=None):
             logging.error(f"Upload-Fehler bei Segment {seg}: {e}")
             target_corrupt = resolve_target_path(CORRUPT_DIR, filename)
             shutil.move(work_path, target_corrupt)
-            cleanup_work_files(segments)
+            cleanup_work_files(segments, is_error=True)
             return
 
     # Erfolgreich verarbeitet: In DONE-Verzeichnis verschieben
