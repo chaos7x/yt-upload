@@ -102,36 +102,6 @@ ENABLE_DESCRIPTION_CENSOR = os.environ.get('ENABLE_DESCRIPTION_CENSOR', 'false')
 _env_blacklist = os.environ.get('DESCRIPTION_BLACKLIST', '')
 DESCRIPTION_BLACKLIST = [w.strip() for w in _env_blacklist.split(',') if w.strip()]
 
-
-', fallback=DYNAMIC_PLAYLISTS)
-
-        if 'blacklist' in config:
-            ini_blacklist = [key.strip() for key in config.options('blacklist') if key.strip() != '__name__']
-            if ini_blacklist:
-                DESCRIPTION_BLACKLIST = ini_blacklist
-
-    # --- Step 2: Env-Vars überschreiben Config-Datei (falls explizit gesetzt) ---
-    if 'IN_DIR' in os.environ: IN_DIR = os.environ['IN_DIR']
-    if 'WORK_DIR' in os.environ: WORK_DIR = os.environ['WORK_DIR']
-    if 'DONE_DIR' in os.environ: DONE_DIR = os.environ['DONE_DIR']
-    if 'CORRUPT_DIR' in os.environ: CORRUPT_DIR = os.environ['CORRUPT_DIR']
-    if 'LOG_FILE' in os.environ: LOG_FILE = os.environ['LOG_FILE']
-    if 'CREDENTIALS_FILE' in os.environ: CREDENTIALS_FILE = os.environ['CREDENTIALS_FILE']
-
-    if 'VIDEO_PRIVACY' in os.environ: VIDEO_PRIVACY = os.environ['VIDEO_PRIVACY']
-    if 'VIDEO_LANGUAGE' in os.environ: VIDEO_LANGUAGE = os.environ['VIDEO_LANGUAGE']
-    if 'PLAYLIST_NAME' in os.environ: PLAYLIST_NAME = os.environ['PLAYLIST_NAME']
-    if 'DEFAULT_DESCRIPTION' in os.environ: DEFAULT_DESCRIPTION = os.environ['DEFAULT_DESCRIPTION']
-    if 'DEFAULT_TAGS' in os.environ: DEFAULT_TAGS = os.environ['DEFAULT_TAGS']
-    if 'DEFAULT_CATEGORY' in os.environ: DEFAULT_CATEGORY = os.environ['DEFAULT_CATEGORY']
-
-    if 'ENABLE_DYNAMIC_PLAYLISTS' in os.environ:
-        DYNAMIC_PLAYLISTS = os.environ['ENABLE_DYNAMIC_PLAYLISTS'].lower() in ('1', 'true', 'yes')
-    if 'ENABLE_DESCRIPTION_CENSOR' in os.environ:
-        ENABLE_DESCRIPTION_CENSOR = os.environ['ENABLE_DESCRIPTION_CENSOR'].lower() in ('1', 'true', 'yes')
-    if 'DESCRIPTION_BLACKLIST' in os.environ:
-        _env_bl = os.environ['DESCRIPTION_BLACKLIST']
-        DESCRIPTION_BLACKLIST = [w.strip() for w in _env_bl.split(',') if w.strip()]
 def load_configuration(log_changes=False):
     global IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR, LOG_FILE, CREDENTIALS_FILE
     global DEFAULT_DESCRIPTION, DEFAULT_TAGS, DEFAULT_CATEGORY, VIDEO_PRIVACY
@@ -262,7 +232,7 @@ def load_configuration(log_changes=False):
     AUTO_THUMB_MAX_SEC = auto_thumb_max_sec
     ALLOW_OVERWRITE = allow_overwrite
 
-# Erstmaliges Laden beim Modul-Import/Start
+# Erstmaliges Laden
 load_configuration(log_changes=False)
 
 
