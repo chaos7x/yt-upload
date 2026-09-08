@@ -805,7 +805,7 @@ def split_video_if_needed(work_path):
 def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_PRIVACY):
     """
     Sucht eine Playlist anhand ihres Namens. Erstellt diese, falls nicht vorhanden,
-    und fügt das hochgeladene Video hinzu.
+    und fügt das hochgeladene Video hinzu (inkl. Retry-Logik bei temporären API-Fehlern).
     """
     if not playlist_name or not video_id:
         return False
@@ -848,7 +848,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
             if create_res.status_code in (200, 201):
                 playlist_id = create_res.json().get("id")
 
-        # Video der Playlist zuweisen
+        # Video der Playlist zuweisen (mit Retry-Logik für 409 / 5xx)
         if playlist_id:
             item_url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet"
             item_body = {
@@ -857,12 +857,28 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                     "resourceId": {"kind": "youtube#video", "videoId": video_id}
                 }
             }
-            item_res = requests.post(item_url, headers=headers, json=item_body, timeout=30)
-            if item_res.status_code in (200, 201):
-                logging.info(f"Video {video_id} erfolgreich zur Playlist '{playlist_name}' hinzugefügt.")
-                return True
-            else:
-                logging.warning(f"Video konnte Playlist nicht hinzugefügt werden: {item_res.text}")
+
+            max_retries = 3
+            retry_delay = 3
+
+            for attempt in range(1, max_retries + 1):
+                item_res = requests.post(item_url, headers=headers, json=item_body, timeout=30)
+
+                if item_res.status_code in (200, 201):
+                    logging.info(f"Video {video_id} erfolgreich zur Playlist '{playlist_name}' hinzugefügt.")
+                    return True
+
+                # Bei temporären Fehlern (409 ABORTED, 500, 502, 503, 504) wiederholen
+                if item_res.status_code in (409, 500, 502, 503, 504) and attempt < max_retries:
+                    logging.warning(
+                        f"YouTube API meldet {item_res.status_code} beim Playlist-Assignment. "
+                        f"Retry {attempt}/{max_retries} in {retry_delay}s..."
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    logging.warning(f"Video konnte Playlist nicht hinzugefügt werden: {item_res.text}")
+                    break
 
     except Exception as e:
         logging.error(f"Fehler bei Playlist-API: {e}")
