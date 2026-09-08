@@ -15,7 +15,7 @@
 # ==============================================================================
 
 """
-Automatischer YouTube Video Uploader & CLI-Uploader v2.0.0 (YouTube Data API v3)
+Automatischer YouTube Video Uploader & CLI-Uploader v2.0.3 (YouTube Data API v3)
 Bietet drei Betriebsmodi:
 1. Manuell (CLI): Upload einzelner Dateien wie mit dem klassischen youtube-upload.
 2. Auto-Pipeline (-a --auto): Einmalige Batch-Verarbeitung eines Zielverzeichnisses mit FFmpeg-Splitting & Metadatenvererbung.
@@ -26,7 +26,7 @@ SYSTEM-VORAUSSETZUNGEN:
 - python3-inotify (optional, aber empfohlen für den -D Dämon-Modus ohne Polling-Overhead)
 """
 
-__title__ = "YouTube Video Uploader & CLI-Uploder"
+__title__ = "YouTube Video Uploader & CLI-Uploader"
 __version__ = "2.0.3"
 
 import argparse
@@ -48,11 +48,17 @@ import webbrowser
 import requests
 from datetime import datetime, timezone
 
+# ------------------------------------------------------------------------------
+# Debug-Modus über Umgebungsvariable 'DEBUG' setzen
+# ------------------------------------------------------------------------------
 if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
     os.environ['DEBUG'] = '1'
 else:
     os.environ['DEBUG'] = '0'
 
+# ------------------------------------------------------------------------------
+# Inotify Import-Prüfung (Echtzeit-Dateisystemüberwachung unter Linux)
+# ------------------------------------------------------------------------------
 try:
     import inotify.adapters
     HAS_INOTIFY = True
@@ -60,14 +66,14 @@ except ImportError:
     inotify = None
     HAS_INOTIFY = False
 
-# ==========================================
-# KONFIGURATION & PATHS
-# ==========================================
+# ==============================================================================
+# KONFIGURATION & STANDARD-PFADE
+# ==============================================================================
 CONF_PATH = os.environ.get('CONFIG_FILE', '/etc/yt-upload/upload.conf')
 CONF_D_DIR = os.environ.get('CONF_D_DIR', os.path.join(os.path.dirname(CONF_PATH), 'conf.d'))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 1. Standard-Fallbacks (Docker vs. Bare-Metal Host)
+# Dynamic Path Detection: Docker Container Mounts (/videos) vs. Bare-Metal Host
 IN_DIR = os.environ.get('IN_DIR', "/videos/in" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "in"))
 WORK_DIR = os.environ.get('WORK_DIR', "/videos/work" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "work"))
 DONE_DIR = os.environ.get('DONE_DIR', "/videos/done" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "done"))
@@ -76,14 +82,15 @@ CORRUPT_DIR = os.environ.get('CORRUPT_DIR', "/videos/corrupt" if os.path.exists(
 LOG_FILE = os.environ.get('LOG_FILE', "/log/upload.log" if os.path.exists("/log") else os.path.join(BASE_DIR, "upload.log"))
 CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', "/app/oauth/youtube-upload-credentials.json" if os.path.exists("/app/oauth") else os.path.join(BASE_DIR, "youtube-upload-credentials.json"))
 
-SEGMENT_TIME_SEC = 36000  # 10 Stunden Limit (in Sekunden)
-CHUNK_UNIT_BYTES = 262144  # YouTube Resumable Upload Chunks müssen Vielfache von 256 KiB sein
+# YouTube Limitierungen & Netzwerk-Chunk-Spezifikationen
+SEGMENT_TIME_SEC = 36000     # Maximum 10 Stunden pro Video vor automatischem Splitting
+CHUNK_UNIT_BYTES = 262144    # 256 KiB Basis-Einheit für Resumable Chunk Uploads
 
 DEFAULT_DESCRIPTION = "Automatischer Upload via Script."
 DEFAULT_TAGS = "Upload, Video"
 DEFAULT_CATEGORY = "Entertainment"
 
-VIDEO_PRIVACY = "unlisted"  # 'public', 'private', 'unlisted'
+VIDEO_PRIVACY = "unlisted"   # Mögliche Werte: 'public', 'private', 'unlisted'
 VIDEO_LANGUAGE = "de"
 ALLOW_EMBEDDING = True
 PLAYLIST_NAME = ""
@@ -94,15 +101,26 @@ AUTO_THUMB_MAX_SEC = 120
 ALLOW_OVERWRITE = True
 DYNAMIC_PLAYLISTS = False
 
-# Globale Variable zur Tracking-Vergleichs-Hash-Verwaltung der Configs
+# Laufzeit-Variablen für Hot-Reload und Zensur-Einstellungen
 CURRENT_CONFIG_HASH = ""
-
-# Globale Variable für die Zensur-Funktionalität der Video-Beschreibung
 ENABLE_DESCRIPTION_CENSOR = os.environ.get('ENABLE_DESCRIPTION_CENSOR', 'false').lower() in ('true', 'yes', '1')
 _env_blacklist = os.environ.get('DESCRIPTION_BLACKLIST', '')
 DESCRIPTION_BLACKLIST = [w.strip() for w in _env_blacklist.split(',') if w.strip()]
 
+
+# ==============================================================================
+# KONFIGURATIONSLADER & DYNAMISCHER HOT-RELOAD
+# ==============================================================================
 def load_configuration(log_changes=False):
+    """
+    Lädt die Konfiguration in folgender Hierarchie:
+    1. Hardcoded Fallbacks
+    2. Haupt-Konfiguration (/etc/yt-upload/upload.conf)
+    3. Zusatz-Konfigurationen (/etc/yt-upload/conf.d/*.conf)
+    4. Umgebungsvariablen (höchste Priorität)
+
+    Berechnet einen MD5-Hash der Dateien für automatische Laufzeit-Aktualisierung.
+    """
     global IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR, LOG_FILE, CREDENTIALS_FILE
     global DEFAULT_DESCRIPTION, DEFAULT_TAGS, DEFAULT_CATEGORY, VIDEO_PRIVACY
     global VIDEO_LANGUAGE, ALLOW_EMBEDDING, PLAYLIST_NAME, AUTO_GENERATE_THUMBNAIL
@@ -110,29 +128,28 @@ def load_configuration(log_changes=False):
     global CURRENT_CONFIG_HASH
     global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST
 
-    # 1. Grund-Defaults (Hardcoded Fallbacks)
-    # Stellt sicher, dass bei einem Reload entfernte INI-Optionen wieder zurückfallen
-    in_dir = "/app/in"
-    work_dir = "/app/work"
-    done_dir = "/app/done"
-    corrupt_dir = "/app/corrupt"
-    log_file = "/app/yt-upload.log"
-    credentials_file = "/app/credentials.json"
+    # 1. Richtig: Greife auf die oben im Header ermittelten Standardpfade zurück!
+    in_dir = IN_DIR
+    work_dir = WORK_DIR
+    done_dir = DONE_DIR
+    corrupt_dir = CORRUPT_DIR
+    log_file = LOG_FILE
+    credentials_file = CREDENTIALS_FILE
 
-    default_description = ""
-    default_tags = ""
-    default_category = "22"
-    video_privacy = "unlisted"
-    video_language = "de"
-    allow_embedding = True
-    playlist_name = ""
-    auto_generate_thumbnail = True
-    auto_thumb_min_sec = 10
-    auto_thumb_max_sec = 60
-    allow_overwrite = False
-    enable_description_censor = False
-    dynamic_playlists = False
-    description_blacklist = []
+    default_description = DEFAULT_DESCRIPTION
+    default_tags = DEFAULT_TAGS
+    default_category = DEFAULT_CATEGORY
+    video_privacy = VIDEO_PRIVACY
+    video_language = VIDEO_LANGUAGE
+    allow_embedding = ALLOW_EMBEDDING
+    playlist_name = PLAYLIST_NAME
+    auto_generate_thumbnail = AUTO_GENERATE_THUMBNAIL
+    auto_thumb_min_sec = AUTO_THUMB_MIN_SEC
+    auto_thumb_max_sec = AUTO_THUMB_MAX_SEC
+    allow_overwrite = ALLOW_OVERWRITE
+    enable_description_censor = ENABLE_DESCRIPTION_CENSOR
+    dynamic_playlists = DYNAMIC_PLAYLISTS
+    description_blacklist = DESCRIPTION_BLACKLIST
 
     config = configparser.ConfigParser()
     config_files = []
@@ -143,7 +160,7 @@ def load_configuration(log_changes=False):
     if os.path.isdir(CONF_D_DIR):
         config_files.extend(sorted(glob.glob(os.path.join(CONF_D_DIR, "*.conf"))))
 
-    # --- HASHING & DYNAMIC RELOAD ---
+    # --- Hash-Berechnung für Laufzeit-Erkennung von Änderungen ---
     hasher = hashlib.md5()
     file_list_names = []
     for cfg in config_files:
@@ -163,7 +180,7 @@ def load_configuration(log_changes=False):
         logging.info(f"🔄 Konfigurationsänderung erkannt (geändert: {files_str}). Synchronisiere...")
     CURRENT_CONFIG_HASH = new_hash
 
-    # --- Step 1: Config-Dateien parsen ---
+    # --- Step 1: Config-Dateien verarbeiten ---
     if config_files:
         config.read(config_files, encoding='utf-8')
 
@@ -190,12 +207,13 @@ def load_configuration(log_changes=False):
             enable_description_censor = config.getboolean('settings', 'enable_description_censor', fallback=enable_description_censor)
             dynamic_playlists = config.getboolean('settings', 'enable_dynamic_playlists', fallback=dynamic_playlists)
 
+        # Einlesen der Wort-Blacklist aus Sektion [blacklist]
         if 'blacklist' in config:
             ini_blacklist = [key.strip() for key in config.options('blacklist') if key.strip() != '__name__']
             if ini_blacklist:
                 description_blacklist = ini_blacklist
 
-    # --- Step 2: Env-Vars überschreiben alles (höchste Priorität nach CLI) ---
+    # --- Step 2: Umgebungsvariablen überschreiben INI-Einstellungen ---
     IN_DIR = os.environ.get('IN_DIR', in_dir)
     WORK_DIR = os.environ.get('WORK_DIR', work_dir)
     DONE_DIR = os.environ.get('DONE_DIR', done_dir)
@@ -232,15 +250,17 @@ def load_configuration(log_changes=False):
     AUTO_THUMB_MAX_SEC = auto_thumb_max_sec
     ALLOW_OVERWRITE = allow_overwrite
 
-# Erstmaliges Laden
+# Initiales Laden beim Scriptstart
 load_configuration(log_changes=False)
 
 
-# ==========================================
+# ==============================================================================
 # OAUTH TOKEN HELPER
-# ==========================================
+# ==============================================================================
 def get_access_token(cred_file=None, client_secrets_file=None):
-    """Liest den Refresh Token aus der JSON-Datei und holt ein frisches Access Token via Google OAuth API."""
+    """
+    Generiert mittels Refresh-Token einen frischen OAuth2 Access Token bei Google.
+    """
     target_cred = cred_file or CREDENTIALS_FILE
     if not os.path.exists(target_cred):
         raise FileNotFoundError(f"Credentials-Datei nicht gefunden: {target_cred}")
@@ -248,7 +268,6 @@ def get_access_token(cred_file=None, client_secrets_file=None):
     with open(target_cred, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # Unterstützung für verschiedene OAuth-JSON-Strukturen (Google Client Secrets vs Token Files)
     client_data = data
     if client_secrets_file:
         with open(client_secrets_file, "r", encoding="utf-8") as f:
@@ -276,10 +295,11 @@ def get_access_token(cred_file=None, client_secrets_file=None):
     return res.json().get("access_token")
 
 
-# ==========================================
-# HELPER & CLEANUP
-# ==========================================
+# ==============================================================================
+# DATEISYSTEM & REINIGUNGS-HELFER
+# ==============================================================================
 def ensure_directories():
+    """Stellt sicher, dass alle notwendigen Zielverzeichnisse auf dem Dateisystem existieren."""
     for d in [IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR]:
         try:
             os.makedirs(d, exist_ok=True)
@@ -288,6 +308,7 @@ def ensure_directories():
 
 
 def unique_path(directory, filename):
+    """Generiert einen eindeutigen Dateipfad durch Anhängen von Zählern, falls die Datei existiert."""
     candidate = os.path.join(directory, filename)
     if not os.path.lexists(candidate):
         return candidate
@@ -302,6 +323,7 @@ def unique_path(directory, filename):
 
 
 def resolve_target_path(directory, filename):
+    """Bestimmt das Ziel basierend auf der ALLOW_OVERWRITE Einstellung."""
     candidate = os.path.join(directory, filename)
     if ALLOW_OVERWRITE:
         return candidate
@@ -309,6 +331,7 @@ def resolve_target_path(directory, filename):
 
 
 def cleanup_work_files(work_paths, is_error=False):
+    """Löscht temporär erzeugte Arbeits- oder Segmentdateien aus dem WORK-Ordner."""
     log_func = logging.warning if is_error else logging.info
     log_func("Bereinige Dateien des aktuellen Jobs im WORK-Verzeichnis...")
     for item_path in work_paths:
@@ -320,6 +343,7 @@ def cleanup_work_files(work_paths, is_error=False):
 
 
 def cleanup_generated_thumbnail(thumb_path):
+    """Löscht automatisch erzeugte Thumbnails aus dem temporären Verzeichnis."""
     if not thumb_path:
         return
 
@@ -337,13 +361,12 @@ def cleanup_generated_thumbnail(thumb_path):
 
 def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
     """
-    Prüft, ob eine Datei vollständig geschrieben wurde (z.B. bei laufendem Kopiervorgang)
-    und ob der Container (moov-Atom) valide ist.
+    Prüft, ob eine Datei vollständig geschrieben wurde (Größenprüfung über Zeit)
+    und ob es sich um einen fehlerfreien Video-Stream handelt (mittels ffprobe).
     """
     if not os.path.exists(file_path):
         return False
 
-    # 1. Prüfen, ob die Dateigröße sich noch ändert (Kopiervorgang im Gange)
     last_size = -1
     for check_num in range(max_checks):
         try:
@@ -358,7 +381,6 @@ def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
             continue
 
         if last_size != -1 and current_size == last_size:
-            # Größe stabil
             break
         elif last_size != -1:
             logging.info(f"Datei wächst noch ({current_size / (1024*1024):.1f} MB)... warte weiter.")
@@ -366,11 +388,9 @@ def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
         last_size = current_size
         time.sleep(wait_interval)
     else:
-        # Größe hat sich kontinuierlich geändert oder war 0
         logging.warning(f"Datei wird nach {max_checks * wait_interval}s noch geschrieben: {os.path.basename(file_path)}")
         return False
 
-    # 2. FFprobe-Integritätscheck
     cmd_check = [
         "ffprobe",
         "-v", "error",
@@ -386,10 +406,11 @@ def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
     return True
 
 
-# ==========================================
-# INOTIFY & INPUT FINDER
-# ==========================================
+# ==============================================================================
+# INOTIFY & EINGANGSÜBERWACHUNG
+# ==============================================================================
 def find_existing_video(target_dir=IN_DIR):
+    """Sucht rekursiv nach kompatiblen Videodateien im Eingangsverzeichnis."""
     valid_exts = (".mp4", ".mkv", ".mov", ".m4v")
     if not os.path.isdir(target_dir):
         return None
@@ -401,7 +422,10 @@ def find_existing_video(target_dir=IN_DIR):
 
 
 def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
-    # Prüfe vor der Suche auf geänderte Config-Dateien
+    """
+    Blockiert den Prozess im Dämonenmodus, bis eine neue Datei per inotify signalisiert
+    oder per Polling-Fallback im Eingangsordner gefunden wird.
+    """
     load_configuration(log_changes=True)
 
     existing = find_existing_video(target_dir)
@@ -422,11 +446,9 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
             if existing:
                 return existing
 
-    # Nutze die übergebene InotifyTree-Instanz
     while True:
         try:
             for event in inotify_adapter.event_gen(yield_nones=False, timeout_s=10):
-                # Prüfe bei jedem Timeout/Event die Konfigurations-Hashes
                 load_configuration(log_changes=True)
 
                 if event is None:
@@ -450,10 +472,11 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
                 return existing
 
 
-# ==========================================
-# METADATEN & THUMBNAIL
-# ==========================================
+# ==============================================================================
+# METADATEN-PARSING & THUMBNAIL-EXTRAKTION
+# ==============================================================================
 def truncate_title(title: str, max_length: int = 100) -> str:
+    """Kürzt Titel unter Einhaltung des YouTube-Limits von 100 Zeichen."""
     if not title:
         return ""
     if len(title) <= max_length:
@@ -462,9 +485,9 @@ def truncate_title(title: str, max_length: int = 100) -> str:
 
 
 def get_valid_category_id(category_input):
-    """Mappt Textgenres oder Namen auf offizielle YouTube Category IDs."""
+    """Mappt Kategorie-Namen auf die offiziellen numerischen YouTube-IDs."""
     if not category_input:
-        return "22"  # Standard: People & Blogs
+        return "22"
 
     if str(category_input).isdigit():
         return str(category_input)
@@ -512,6 +535,7 @@ def get_valid_category_id(category_input):
 
 
 def normalize_recording_date(value):
+    """Konvertiert Datumsangaben in das ISO-8601 UTC-Format für die API."""
     if not value:
         return None
 
@@ -529,6 +553,7 @@ def normalize_recording_date(value):
 
 
 def sanitize_text(text):
+    """Entfernt Steuerzeichen und nicht-druckbare Unicode-Zeichen aus Texten."""
     if not text:
         return text
     normalized = unicodedata.normalize('NFKD', text)
@@ -538,6 +563,7 @@ def sanitize_text(text):
 
 
 def parse_location(location_str):
+    """Verarbeitet Geokoordinaten aus String-Formaten (latitude=X,longitude=Y)."""
     if not location_str:
         return None
     try:
@@ -555,6 +581,10 @@ def parse_location(location_str):
 
 
 def extract_metadata_and_thumb(file_path):
+    """
+    Extrahiert eingebettete Tags (Titel, Beschreibung, Künstler etc.) via ffprobe
+    sowie embedded Coverart/Thumbnails. Generiert alternativ ein Vorschaubild aus dem Video.
+    """
     metadata = {
         "title": None,
         "description": None,
@@ -579,13 +609,11 @@ def extract_metadata_and_thumb(file_path):
         probe_data = json.loads(res.stdout)
 
         format_info = probe_data.get("format", {})
-        # Wandelt alle Tag-Schlüssel zuverlässig in Kleinschreibung um
         tags = {str(k).lower(): v for k, v in format_info.get("tags", {}).items()}
 
         if "duration" in format_info:
             metadata["duration"] = int(float(format_info["duration"]))
 
-        # 'title' statt 'TITLE' abfragen
         raw_title = tags.get("title")
         if raw_title:
             metadata["title"] = truncate_title(sanitize_text(raw_title), max_length=100)
@@ -599,15 +627,14 @@ def extract_metadata_and_thumb(file_path):
     except Exception as e:
         logging.error(f"Fehler beim Auslesen der Metadaten via FFprobe: {e}")
 
-    # Eindeutige temporäre Pfade nutzen
     temp_dir = tempfile.gettempdir()
     pid = os.getpid()
     timestamp = int(time.time() * 1000)
     thumb_path = os.path.join(temp_dir, f"yt_thumb_{pid}_{timestamp}.jpg")
     temp_attach = os.path.join(temp_dir, f"yt_attach_{pid}_{timestamp}.jpg")
 
+    # Versuche eingebettete Cover-Bilder zu extrahieren (MKV / MP4 Attachments)
     try:
-        # 1. Versuch: In der Datei eingebettetes Cover/Attachment extrahieren (z.B. MKV/MP4)
         cmd_mkv = ["ffmpeg", "-y", "-dump_attachment:t:0", temp_attach, "-i", file_path]
         subprocess.run(cmd_mkv, capture_output=True, text=True)
 
@@ -622,23 +649,20 @@ def extract_metadata_and_thumb(file_path):
             cmd_conv = ["ffmpeg", "-y", "-i", temp_attach, "-q:v", "2", thumb_path]
             subprocess.run(cmd_conv, capture_output=True, text=True)
 
-        # 2. Versuch: Automatische Frame-Extraktion (falls kein Cover vorhanden & auto_generate_thumbnail = True)
+        # Fallback: Frame an bestimmter Position im Video als Thumbnail rendern
         if (not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0) and AUTO_GENERATE_THUMBNAIL:
             duration = metadata["duration"]
             
-            # Ziel-Timestamp ermitteln
             if duration <= 0:
                 seek_sec = AUTO_THUMB_MIN_SEC
             elif duration < AUTO_THUMB_MIN_SEC:
-                seek_sec = max(1, duration // 2)  # Bei sehr kurzen Videos genau die Mitte wählen
+                seek_sec = max(1, duration // 2)
             else:
-                # Wähle die Mitte zwischen Min und Max, begrenze aber durch die tatsächliche Videolänge
                 target_sec = AUTO_THUMB_MIN_SEC + ((AUTO_THUMB_MAX_SEC - AUTO_THUMB_MIN_SEC) // 2)
                 seek_sec = min(target_sec, max(1, duration - 1))
 
             logging.info(f"Generiere Auto-Thumbnail bei Sekunde {seek_sec} (Video-Dauer: {duration}s)...")
 
-            # Frame extrahieren
             cmd_frame = [
                 "ffmpeg", "-y",
                 "-ss", str(seek_sec),
@@ -649,7 +673,6 @@ def extract_metadata_and_thumb(file_path):
             ]
             subprocess.run(cmd_frame, capture_output=True, text=True)
 
-            # Fallback: Falls der Seek fehlgeschlagen ist (z.B. unvollständige Keyframe-Indexe), nimm den ersten I-Frame
             if not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0:
                 logging.warning("Seek fehlgeschlagen, versuche ersten Keyframe zu greifen...")
                 cmd_keyframe = [
@@ -680,13 +703,13 @@ def extract_metadata_and_thumb(file_path):
     return metadata
 
 
-# ==========================================
-# BESCHREIBUNGS-ZENSUR
-# ==========================================
+# ==============================================================================
+# BESCHREIBUNGS- UND TITEL-ZENSUR
+# ==============================================================================
 def censor_text(text: str) -> str:
     """
-    Zensiert sensible Begriffe in Texten (Titel oder Beschreibung)
-    anhand der Konfigurations-Blacklist.
+    Durchsucht den übergebenen Text nach Wörtern aus der Konfigurations-Blacklist
+    und ersetzt gefundene Treffer durch Sternchen (*), unter Beibehaltung der Wortlänge.
     """
     if not ENABLE_DESCRIPTION_CENSOR or not text:
         return text
@@ -694,28 +717,25 @@ def censor_text(text: str) -> str:
     if DESCRIPTION_BLACKLIST:
         escaped_words = [re.escape(word) for word in DESCRIPTION_BLACKLIST if word.strip()]
         if escaped_words:
-            # \b funktioniert bei Domains oft nicht perfekt vor Punkten,
-            # daher nutzen wir hier einen flexibleren Ansatz für Wörter und Domains
+            # Case-insensitive Match aller Blacklist-Begriffe
             pattern = re.compile(r'(?i)' + '|'.join(escaped_words))
 
             def replace_match(match):
                 matched_str = match.group(0)
-                # Entweder kompletter Sternchen-Ersatz oder ein fixer Platzhalter
                 return '*' * len(matched_str)
 
             text = pattern.sub(replace_match, text)
 
     return text
 
-# ==========================================
+
+# ==============================================================================
 # FFMPEG LOSSLESS SPLITTER
-# ==========================================
+# ==============================================================================
 def split_video_if_needed(work_path):
     """
-    Prüft die Videodauer. Ist sie größer als SEGMENT_TIME_SEC, wird die Datei
-    verlustfrei in Segmente aufgeteilt.
-    WICHTIG: Die Originaldatei work_path wird hier NICHT gelöscht, damit sie
-    anschließend in DONE_DIR archiviert werden kann.
+    Prüft, ob das Video die Maximallänge (10h) überschreitet.
+    Wenn ja, wird es verlustfrei mittels Stream-Copying (-c copy) in mehrere Teile gesplittet.
     """
     try:
         cmd_probe = [
@@ -741,7 +761,7 @@ def split_video_if_needed(work_path):
     base_name, ext = os.path.splitext(filename)
     segment_pattern = os.path.join(WORK_DIR, f"{base_name}_part%02d{ext}")
 
-    # Alte Segmente anhand von Prefix und Extension sauber bereinigen
+    # Bereinige alte Rest-Segmente gleicher Benennung
     for item in os.listdir(WORK_DIR):
         if item.startswith(f"{base_name}_part") and item.endswith(ext):
             stale_segment = os.path.join(WORK_DIR, item)
@@ -779,10 +799,14 @@ def split_video_if_needed(work_path):
     return created_segments
 
 
-# ==========================================
-# NATIVE REST API UPLOADER & PLAYLIST HELPER
-# ==========================================
+# ==============================================================================
+# REST API UPLOADER & PLAYLIST MANAGEMENT
+# ==============================================================================
 def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_PRIVACY):
+    """
+    Sucht eine Playlist anhand ihres Namens. Erstellt diese, falls nicht vorhanden,
+    und fügt das hochgeladene Video hinzu.
+    """
     if not playlist_name or not video_id:
         return False
 
@@ -791,7 +815,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
         playlist_id = None
         next_page = None
 
-        # Paginierung bei mehr als 50 Playlists
+        # Playlists des Kanals abfragen
         while True:
             list_url = f"https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50"
             if next_page:
@@ -813,6 +837,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                 logging.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {res.text}")
                 break
 
+        # Neue Playlist erstellen, wenn keine passenden Treffer vorliegen
         if not playlist_id:
             create_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet,status"
             create_body = {
@@ -823,6 +848,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
             if create_res.status_code in (200, 201):
                 playlist_id = create_res.json().get("id")
 
+        # Video der Playlist zuweisen
         if playlist_id:
             item_url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet"
             item_body = {
@@ -864,18 +890,19 @@ def upload_single_video(
     chunksize=268435456,
     open_link=False
 ):
-    # YouTube API Limits einhalten (Titel max 100, Beschreibung max 5000 Zeichen)
+    """
+    Führt den eigentlichen Upload über die Resumable Upload HTTP REST API von YouTube durch.
+    Überträgt Metadaten, Chunks, gesetzte Thumbnails und verknüpft Playlists.
+    """
     if title:
         title = truncate_title(sanitize_text(title), max_length=100)
     else:
-        # Fallback auf Dateinamen, falls gar kein Titel übergeben wurde
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         title = truncate_title(sanitize_text(base_name), max_length=100)
 
     if desc:
         desc = desc[:5000]
 
-    # Wenn ein Veröffentlichungszeitpunkt gesetzt ist, muss der Status 'private' sein
     if publish_at and privacy != "private":
         logging.info(f"Status wurde für geplanten Upload von '{privacy}' auf 'private' korrigiert.")
         privacy = "private"
@@ -885,16 +912,15 @@ def upload_single_video(
     file_size = os.path.getsize(file_path)
     access_token = get_access_token(cred_file, client_secrets_file)
 
-    # Session für Verbindungs-Wiederverwendung (Performance)
     session = requests.Session()
 
-    # Chunksize muss ein Vielfaches von 256 KiB sein
+    # Validierung der Chunk-Größe für Resumable Uploads (Vielfaches von 256 KiB)
     if chunksize % CHUNK_UNIT_BYTES != 0:
         adjusted_chunksize = max(CHUNK_UNIT_BYTES, (chunksize // CHUNK_UNIT_BYTES) * CHUNK_UNIT_BYTES)
         logging.info(f"Chunksize angepasst auf Vielfaches von 256 KiB: {chunksize} -> {adjusted_chunksize} Bytes")
         chunksize = adjusted_chunksize
 
-# Safe Tags Sanitation & Limits (max 100 Zeichen pro Tag, max 400 Zeichen gesamt)
+    # Tag-Formatierung und -Validierung
     clean_tags = []
     if isinstance(tags, list):
         tags_list = tags
@@ -915,10 +941,9 @@ def upload_single_video(
             final_tags.append(t)
             current_length += len(t) + 1
 
-    # Safe Category fallback
     cat_id = get_valid_category_id(category) if 'get_valid_category_id' in globals() else category
     if not cat_id:
-        cat_id = "22"  # Standard YouTube Kategorie: People & Blogs
+        cat_id = "22"
 
     snippet = {
         "title": title,
@@ -951,20 +976,18 @@ def upload_single_video(
         rec_date = normalize_recording_date(rec_date)
         metadata_body["recordingDetails"] = {"recordingDate": rec_date}
 
-
     parsed_loc = parse_location(location) if isinstance(location, str) else location
     if parsed_loc:
         metadata_body["recordingDetails"] = metadata_body.get("recordingDetails", {})
         metadata_body["recordingDetails"]["location"] = parsed_loc
 
-    # DEBUG LOGGING: Gibt das exakte JSON-Payload im Log aus
     logging.info(f"PAYLOAD DEBUG: {json.dumps(metadata_body, ensure_ascii=False)}")
 
     parts = "snippet,status"
     if "recordingDetails" in metadata_body:
         parts += ",recordingDetails"
 
-    # Initialisiere die Resumable Upload Session (EINMAL vor der Upload-Schleife)
+    # Step 1: Initialisierung der Resumable Upload Session
     init_url = f"https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part={parts}"
     init_headers = {
         "Authorization": f"Bearer {access_token}",
@@ -985,6 +1008,7 @@ def upload_single_video(
 
     logging.info(f"Starte Chunk-Upload ({file_size / (1024 * 1024):.2f} MB) mit Chunksize {chunksize / (1024 * 1024):.1f} MB...")
 
+    # Step 2: Übertragung in Chunks mit automatischer Retry-Logik
     max_retries = 5
     video_id = None
     uploaded_bytes = 0
@@ -1003,13 +1027,12 @@ def upload_single_video(
                 "Content-Type": "video/*"
             }
 
-            # Retry-Schleife für den jeweiligen Chunk
             chunk_success = False
             for attempt in range(1, max_retries + 1):
                 try:
-
                     put_res = session.put(upload_url, headers=chunk_headers, data=chunk, timeout=120)
 
+                    # HTTP 200/201: Upload vollständig beendet
                     if put_res.status_code in (200, 201):
                         resp_data = put_res.json()
                         video_id = resp_data.get("id")
@@ -1018,15 +1041,14 @@ def upload_single_video(
                         logging.info(f"Upload ERFOLGREICH abgeschlossen! Video-ID: {video_id}")
                         break
 
+                    # HTTP 308 Resume Incomplete: Chunk erfolgreich verarbeitet
                     elif put_res.status_code == 308:
-                        # Upload unvollständig, Range-Header prüfen
                         range_hdr = put_res.headers.get("Range")
                         if range_hdr and "-" in range_hdr:
                             uploaded_bytes = int(range_hdr.split("-")[1]) + 1
                         else:
                             uploaded_bytes += chunk_len
 
-                        # Sicherheits-Check: Setze den Offset auf das nächste Vielfache von 256 KiB zurück
                         if uploaded_bytes < file_size and uploaded_bytes % CHUNK_UNIT_BYTES != 0:
                             uploaded_bytes = (uploaded_bytes // CHUNK_UNIT_BYTES) * CHUNK_UNIT_BYTES
                             logging.warning(f"Offset korrigiert auf 256-KiB-Grenze: {uploaded_bytes} Bytes")
@@ -1036,6 +1058,7 @@ def upload_single_video(
                         chunk_success = True
                         break
 
+                    # Token abgelaufen während des Uploads
                     elif put_res.status_code in (401, 403):
                         access_token = get_access_token(cred_file, client_secrets_file)
                         chunk_headers["Authorization"] = f"Bearer {access_token}"
@@ -1048,6 +1071,7 @@ def upload_single_video(
             if not chunk_success:
                 raise RuntimeError("Max Retries beim Upload überschritten.")
 
+    # Step 3: Post-Upload Aktionen (Thumbnail setzen, Playlist zuweisen)
     try:
         if video_id:
             if thumb_path and os.path.exists(thumb_path):
@@ -1084,10 +1108,19 @@ def upload_single_video(
     return video_id
 
 
-# ==========================================
-# BATCH PIPELINE LOGIK
-# ==========================================
+# ==============================================================================
+# PIPELINE STEUERUNG FÜR EINZELDATEIEN
+# ==============================================================================
 def process_single_file(file_path, args=None):
+    """
+    Steuert die vollständige Verarbeitung einer Datei:
+    1. Validierung
+    2. Verschieben nach WORK
+    3. Metadaten-Extraktion & Zensierung
+    4. Ggf. Splitting bei Überlänge
+    5. Upload aller Teile
+    6. Verschieben nach DONE (oder CORRUPT bei Fehler)
+    """
     filename = os.path.basename(file_path)
     logging.info(f"--- VERARBEITE DATEI: {filename} ---")
 
@@ -1097,21 +1130,19 @@ def process_single_file(file_path, args=None):
         shutil.move(file_path, target_corrupt)
         return
 
-    # In WORK-Verzeichnis verschieben
     work_path = resolve_target_path(WORK_DIR, filename)
     logging.info(f"Verschiebe nach WORK: {work_path}")
     shutil.move(file_path, work_path)
 
-    # Metadaten & Thumbnail auslesen
     meta = extract_metadata_and_thumb(work_path)
 
-    # für die Zensur vorbereiten
     raw_title = (args.title if args and args.title else meta["title"]) or os.path.splitext(filename)[0]
     raw_desc = (args.description if args and args.description else meta["description"]) or DEFAULT_DESCRIPTION
 
-    # CLI-Overrides oder Fallbacks
+    # Zensur-Filter auf Titel und Beschreibung anwenden
     title_base = censor_text(raw_title)
-    desc_base = censor_text(raw_desc) # Zensur anwenden
+    desc_base = censor_text(raw_desc)
+
     category = (args.category if args and args.category else meta["genre"]) or DEFAULT_CATEGORY
     tags = (args.tags if args and args.tags else meta["genre"]) or DEFAULT_TAGS
     rec_date = (args.recording_date if args and args.recording_date else meta["date"])
@@ -1125,7 +1156,6 @@ def process_single_file(file_path, args=None):
     default_audio_lang = (args.default_audio_language if args and args.default_audio_language else None) or VIDEO_LANGUAGE
     embeddable = args.embeddable if (args and args.embeddable is not None) else ALLOW_EMBEDDING
     
-    # Dynamisches oder festes Playlist-Mapping
     target_playlist = PLAYLIST_NAME
     if args and args.playlist:
         target_playlist = args.playlist
@@ -1137,10 +1167,8 @@ def process_single_file(file_path, args=None):
     chunksize = args.chunksize if args else 268435456
     open_link = args.open_link if args else False
 
-    # Splitting-Check
     segments = split_video_if_needed(work_path)
 
-    # Segmentweise hochladen
     for idx, seg in enumerate(segments):
         part_title = title_base
         if len(segments) > 1:
@@ -1175,17 +1203,17 @@ def process_single_file(file_path, args=None):
             cleanup_work_files(segments, is_error=True)
             return
 
-    # Erfolgreich verarbeitet: In DONE-Verzeichnis verschieben
     target_done = resolve_target_path(DONE_DIR, filename)
     logging.info(f"Verarbeitung erfolgreich. Verschiebe Original nach DONE: {target_done}")
     shutil.move(work_path, target_done)
     cleanup_work_files(segments)
 
 
-# ==========================================
-# CLI PARSER & MAIN ENTRYPOINT
-# ==========================================
+# ==============================================================================
+# CLI PARSER & HAUPTEINSTIEGSPUNKT
+# ==============================================================================
 def parse_arguments():
+    """Initialisiert das Parsing der Kommandozeilenargumente."""
     parser = argparse.ArgumentParser(
         description=f"{__title__} v{__version__}",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -1201,7 +1229,6 @@ def parse_arguments():
     parser.add_argument("-V", "--Version", action="version", version=f"{__title__} v{__version__}")
     parser.add_argument("--tags", help="Kommagetrennte Liste von Tags")
     
-    # WICHTIG: default=None statt default=VIDEO_PRIVACY
     parser.add_argument("--privacy", choices=["public", "private", "unlisted"], default=None, help="Sichtbarkeit")
 
     parser.add_argument("--thumbnail", help="Pfad zu benutzerdefiniertem Thumbnail-Bild")
@@ -1211,12 +1238,10 @@ def parse_arguments():
     parser.add_argument("--location", help="Geo-Koordinaten (Format: 'latitude=50.9,longitude=6.9')")
     parser.add_argument("--recording-date", help="Aufnahmedatum")
 
-    # WICHTIG: default=None statt default=VIDEO_LANGUAGE / ALLOW_EMBEDDING
     parser.add_argument("--default-language", default=None, help="Standardsprache des Titels/der Beschreibung")
     parser.add_argument("--default-audio-language", default=None, help="Standardsprache des Audios")
     parser.add_argument("--embeddable", action="store_true", default=None, help="Einbetten auf externen Seiten erlauben")
 
-    # WICHTIG: default=None statt default=CREDENTIALS_FILE
     parser.add_argument("--credentials-file", default=None, help="Pfad zur OAuth Credentials JSON")
     parser.add_argument("--client-secrets", help="Pfad zur Google Client Secrets JSON")
     parser.add_argument("--chunksize", type=int, default=268435456, help="Upload Chunk-Größe in Bytes")
@@ -1226,6 +1251,10 @@ def parse_arguments():
 
 
 def main():
+    """Hauptablaufsteuerung abhängig von den übergebenen Parametern."""
+    # 1. Konfiguration zuerst laden, damit LOG_FILE, IN_DIR etc. für Logging & Dirs stimmen
+    load_configuration(log_changes=False)
+
     ensure_directories()
 
     logging.basicConfig(
@@ -1241,14 +1270,14 @@ def main():
 
     logging.info(f"=== {__title__} v{__version__} gestartet ===")
 
-    # 1. Manuelle CLI-Ausführung einer einzelnen Datei
+    # Modus 1: Manueller Upload einer angegebenen Datei
     if args.file:
         if not os.path.exists(args.file):
             logging.error(f"Angegebene Datei existiert nicht: {args.file}")
             sys.exit(1)
         process_single_file(args.file, args)
 
-    # 2. Einmaliger Batch-Modus
+    # Modus 2: Auto-Batch – verarbeitet alle bereits vorhandenen Dateien nacheinander
     elif args.auto:
         logging.info(f"Starte einmalige Batch-Verarbeitung in {IN_DIR}...")
         while True:
@@ -1258,29 +1287,35 @@ def main():
                 break
             process_single_file(file_to_process, args)
 
-    # 3. Dauerhafter Dämon-Modus
+    # Modus 3: Dämonen-Modus – Dauerhafte Überwachung mittels Inotify
     elif args.daemon:
-        logging.info(f"Starte Dämon-Modus mit inotify-Überwachung auf {IN_DIR}...")
-
-        # Inotify-Tree einmalig vor der Hauptschleife erzeugen
+        logging.info("Starte Dämon-Modus...")
+        
+        current_watched_dir = None
         inotify_adapter = None
-        if HAS_INOTIFY:
-            try:
-                inotify_adapter = inotify.adapters.InotifyTree(IN_DIR)
-                logging.info(f"InotifyTree erfolgreich auf {IN_DIR} initialisiert.")
-            except Exception as e:
-                logging.error(f"Konnte InotifyTree nicht initialisieren: {e}")
 
         try:
             while True:
+                # Prüfe/Lade Konfiguration bei jedem Durchlauf (aktualisiert ggf. IN_DIR)
+                load_configuration(log_changes=True)
+
+                # Re-Initialisiere inotify, falls sich IN_DIR geändert hat oder der Adapter fehlt
+                if HAS_INOTIFY and current_watched_dir != IN_DIR:
+                    try:
+                        logging.info(f"Initialisiere InotifyTree auf: {IN_DIR}")
+                        inotify_adapter = inotify.adapters.InotifyTree(IN_DIR)
+                        current_watched_dir = IN_DIR
+                    except Exception as e:
+                        logging.error(f"Konnte InotifyTree für {IN_DIR} nicht initialisieren: {e}")
+                        inotify_adapter = None
+
                 input_file = wait_for_input(IN_DIR, inotify_adapter=inotify_adapter)
                 if input_file:
                     process_single_file(input_file, args)
         except KeyboardInterrupt:
-            logging.info("Dämon durch Benutzer gestoppt (SIGINT). Auf Wiedersehen!")
+            logging.info("Dämon-Modus beendet.")
 
     else:
-        # Fallback: Kein Parameter -> Zeige Hilfetext
         print(f"{__title__} v{__version__}\n")
         print("Bitte einen Betriebsmodus wählen:")
         print("  - Einzelne Datei:  python3 yt-upload.py /pfad/zum/video.mp4")
