@@ -3,7 +3,7 @@ name: Build and Push Docker Image
 on:
   push:
     tags:
-      - 'v*.*.*' # Startet automatisch, wenn ein Tag wie v1.0.0 oder v1.2.3 gepusht wird
+      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version:
@@ -19,40 +19,37 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # Erlaubt das Erstellen von Releases
-      packages: write   # Erlaubt das Pushen in die GitHub Container Registry
+      contents: write   
+      packages: write   
+
+    strategy:
+      matrix:
+        include:
+          - dockerfile: ./Dockerfile
+            suffix: ""
+          - dockerfile: ./Dockerfile.alpine
+            suffix: "-alpine"
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Zwingend nötig, um alle Tags für das Version-Bumping zu lesen
+          fetch-depth: 0
 
-      # Step: Version ermitteln oder automatisch die Patch-Version erhöhen
       - name: Version berechnen (Auto-Increment Patch)
         id: bump_version
         run: |
-          # 1. Neuesten Tag holen (Fallback auf v1.0.0 falls noch kein Tag existiert)
           LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
           echo "Letzter bekannter Tag: $LATEST_TAG"
 
           if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            # Bei normalem Git-Tag Push: Nimm exakt den gepushten Tag
             TARGET_VERSION="${{ github.ref_name }}"
           elif [ -n "${{ inputs.version }}" ]; then
-            # Wenn manuell eine explizite Version eingegeben wurde
             TARGET_VERSION="${{ inputs.version }}"
           else
-            # Bei manuellem Start ohne Eingabe: Patch-Level inkrementieren
-            # Entferne führendes 'v' falls vorhanden
             CLEAN_TAG="${LATEST_TAG#v}"
-
-            # Zerlege SemVer (MAJOR.MINOR.PATCH)
             IFS='.' read -r MAJOR MINOR PATCH <<< "$CLEAN_TAG"
-
-            # Falls Pre-Release Suffixe dranhängen (z.B. 2b1), reinige den Patch-Wert
             PATCH=$(echo "$PATCH" | grep -o '^[0-9]*')
-
             NEW_PATCH=$((PATCH + 1))
             TARGET_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
           fi
@@ -83,24 +80,25 @@ jobs:
         uses: docker/build-push-action@v7.3.0
         with:
           context: .
-          file: ./Dockerfile
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           pull: true
-          tags: ghcr.io/${{ github.repository }}:${{ steps.bump_version.outputs.version }},ghcr.io/${{ github.repository }}:latest
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.bump_version.outputs.version }}{{ matrix.suffix }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.suffix }}
           provenance: false
           build-args: |
             VERSION=${{ steps.bump_version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-
       - name: GitHub Release & Git-Tag erstellen
+        if: matrix.suffix == '' # Verhindert, dass das Release doppelt erstellt wird
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.bump_version.outputs.version }}
           name: Release ${{ steps.bump_version.outputs.version }}
-          generate_release_notes: true  # Erstellt automatisch Changelog aus Commits/PRs
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
- 
