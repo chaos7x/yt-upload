@@ -117,7 +117,7 @@ def load_configuration(log_changes=False):
     1. Hardcoded Fallbacks
     2. Haupt-Konfiguration (/etc/yt-upload/upload.conf)
     3. Zusatz-Konfigurationen (/etc/yt-upload/conf.d/*.conf)
-    4. Umgebungsvariablen (höchste Priorität)
+    4. Umgebungsvariablen (ergänzend/überschreibend)
 
     Berechnet einen MD5-Hash der Dateien für automatische Laufzeit-Aktualisierung.
     """
@@ -128,7 +128,6 @@ def load_configuration(log_changes=False):
     global CURRENT_CONFIG_HASH
     global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST
 
-    # 1. Richtig: Greife auf die oben im Header ermittelten Standardpfade zurück!
     in_dir = IN_DIR
     work_dir = WORK_DIR
     done_dir = DONE_DIR
@@ -149,7 +148,9 @@ def load_configuration(log_changes=False):
     allow_overwrite = ALLOW_OVERWRITE
     enable_description_censor = ENABLE_DESCRIPTION_CENSOR
     dynamic_playlists = DYNAMIC_PLAYLISTS
-    description_blacklist = DESCRIPTION_BLACKLIST
+
+    # Initialisiere ein Set für die additive Zusammenführung aus INI und ENV
+    combined_blacklist = set(DESCRIPTION_BLACKLIST) if DESCRIPTION_BLACKLIST else set()
 
     config = configparser.ConfigParser()
     config_files = []
@@ -207,13 +208,15 @@ def load_configuration(log_changes=False):
             enable_description_censor = config.getboolean('settings', 'enable_description_censor', fallback=enable_description_censor)
             dynamic_playlists = config.getboolean('settings', 'enable_dynamic_playlists', fallback=dynamic_playlists)
 
-        # Einlesen der Wort-Blacklist aus Sektion [blacklist]
+        # Einlesen und Hinzufügen der Wort-Blacklist aus Sektion [blacklist]
         if 'blacklist' in config:
-            ini_blacklist = [key.strip() for key in config.options('blacklist') if key.strip() != '__name__']
-            if ini_blacklist:
-                description_blacklist = ini_blacklist
+            for key in config.options('blacklist'):
+                if key.strip() != '__name__':
+                    val = config.get('blacklist', key, fallback='true')
+                    if val.lower() in ('true', '1', 'yes', 'on', ''):
+                        combined_blacklist.add(key.strip().lower())
 
-    # --- Step 2: Umgebungsvariablen überschreiben INI-Einstellungen ---
+    # --- Step 2: Umgebungsvariablen verarbeiten ---
     IN_DIR = os.environ.get('IN_DIR', in_dir)
     WORK_DIR = os.environ.get('WORK_DIR', work_dir)
     DONE_DIR = os.environ.get('DONE_DIR', done_dir)
@@ -238,11 +241,16 @@ def load_configuration(log_changes=False):
     else:
         ENABLE_DESCRIPTION_CENSOR = enable_description_censor
 
+    # ENV DESCRIPTION_BLACKLIST wird additiv in das Set gemappt
     if 'DESCRIPTION_BLACKLIST' in os.environ:
         _env_bl = os.environ['DESCRIPTION_BLACKLIST']
-        DESCRIPTION_BLACKLIST = [w.strip() for w in _env_bl.split(',') if w.strip()]
-    else:
-        DESCRIPTION_BLACKLIST = description_blacklist
+        for w in _env_bl.split(','):
+            cleaned = w.strip().lower()
+            if cleaned:
+                combined_blacklist.add(cleaned)
+
+    # Finale Liste sortiert zurückschreiben
+    DESCRIPTION_BLACKLIST = sorted(list(combined_blacklist))
 
     ALLOW_EMBEDDING = allow_embedding
     AUTO_GENERATE_THUMBNAIL = auto_generate_thumbnail
