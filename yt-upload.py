@@ -175,7 +175,11 @@ def load_configuration(log_changes=False):
             ENABLE_DESCRIPTION_CENSOR = config.getboolean('settings', 'enable_description_censor', fallback=ENABLE_DESCRIPTION_CENSOR)
 
         if 'blacklist' in config:
-            DESCRIPTION_BLACKLIST = [key.strip() for key in config.options('blacklist') if key.strip() != '__name__']
+            # Lese Schlüssel aus der INI
+            ini_blacklist = [key.strip() for key in config.options('blacklist') if key.strip() != '__name__']
+            # Falls INI-Einträge existieren, nutze diese, ansonsten behalte den Wert aus der .env
+            if ini_blacklist:
+                DESCRIPTION_BLACKLIST = ini_blacklist
 
     # 3. Dynamic Playlists (Env Var überschreibt Config, falls gesetzt)
     DYNAMIC_PLAYLISTS = os.getenv(
