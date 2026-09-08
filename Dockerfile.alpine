@@ -33,6 +33,7 @@ RUN apk add --no-cache \
     py3-requests \
     py3-inotify \
     libcom_err \
+    bash \
     mc \
     ca-certificates
 
