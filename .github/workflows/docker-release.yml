@@ -78,15 +78,16 @@ jobs:
 
       - name: Build und Push Docker Image (Multi-Arch)
         uses: docker/build-push-action@v7.3.0
+        env:
+          TARGET_TAG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.bump_version.outputs.version }}${{ matrix.suffix }}
+          LATEST_TAG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.suffix }}
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           pull: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.bump_version.outputs.version }}{{ matrix.suffix }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.suffix }}
+          tags: ${{ env.TARGET_TAG }},${% raw %}${{ env.LATEST_TAG }}{% endraw %}
           provenance: false
           build-args: |
             VERSION=${{ steps.bump_version.outputs.version }}
