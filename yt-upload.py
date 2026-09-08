@@ -103,17 +103,66 @@ _env_blacklist = os.environ.get('DESCRIPTION_BLACKLIST', '')
 DESCRIPTION_BLACKLIST = [w.strip() for w in _env_blacklist.split(',') if w.strip()]
 
 
+', fallback=DYNAMIC_PLAYLISTS)
+
+        if 'blacklist' in config:
+            ini_blacklist = [key.strip() for key in config.options('blacklist') if key.strip() != '__name__']
+            if ini_blacklist:
+                DESCRIPTION_BLACKLIST = ini_blacklist
+
+    # --- Step 2: Env-Vars überschreiben Config-Datei (falls explizit gesetzt) ---
+    if 'IN_DIR' in os.environ: IN_DIR = os.environ['IN_DIR']
+    if 'WORK_DIR' in os.environ: WORK_DIR = os.environ['WORK_DIR']
+    if 'DONE_DIR' in os.environ: DONE_DIR = os.environ['DONE_DIR']
+    if 'CORRUPT_DIR' in os.environ: CORRUPT_DIR = os.environ['CORRUPT_DIR']
+    if 'LOG_FILE' in os.environ: LOG_FILE = os.environ['LOG_FILE']
+    if 'CREDENTIALS_FILE' in os.environ: CREDENTIALS_FILE = os.environ['CREDENTIALS_FILE']
+
+    if 'VIDEO_PRIVACY' in os.environ: VIDEO_PRIVACY = os.environ['VIDEO_PRIVACY']
+    if 'VIDEO_LANGUAGE' in os.environ: VIDEO_LANGUAGE = os.environ['VIDEO_LANGUAGE']
+    if 'PLAYLIST_NAME' in os.environ: PLAYLIST_NAME = os.environ['PLAYLIST_NAME']
+    if 'DEFAULT_DESCRIPTION' in os.environ: DEFAULT_DESCRIPTION = os.environ['DEFAULT_DESCRIPTION']
+    if 'DEFAULT_TAGS' in os.environ: DEFAULT_TAGS = os.environ['DEFAULT_TAGS']
+    if 'DEFAULT_CATEGORY' in os.environ: DEFAULT_CATEGORY = os.environ['DEFAULT_CATEGORY']
+
+    if 'ENABLE_DYNAMIC_PLAYLISTS' in os.environ:
+        DYNAMIC_PLAYLISTS = os.environ['ENABLE_DYNAMIC_PLAYLISTS'].lower() in ('1', 'true', 'yes')
+    if 'ENABLE_DESCRIPTION_CENSOR' in os.environ:
+        ENABLE_DESCRIPTION_CENSOR = os.environ['ENABLE_DESCRIPTION_CENSOR'].lower() in ('1', 'true', 'yes')
+    if 'DESCRIPTION_BLACKLIST' in os.environ:
+        _env_bl = os.environ['DESCRIPTION_BLACKLIST']
+        DESCRIPTION_BLACKLIST = [w.strip() for w in _env_bl.split(',') if w.strip()]
 def load_configuration(log_changes=False):
-    """
-    Liest upload.conf und alle conf.d/*.conf Dateien dynamisch ein.
-    Erkennt über MD5-Hash-Vergleiche Dateiänderungen im laufenden Dämon-Betrieb.
-    """
     global IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR, LOG_FILE, CREDENTIALS_FILE
     global DEFAULT_DESCRIPTION, DEFAULT_TAGS, DEFAULT_CATEGORY, VIDEO_PRIVACY
     global VIDEO_LANGUAGE, ALLOW_EMBEDDING, PLAYLIST_NAME, AUTO_GENERATE_THUMBNAIL
     global AUTO_THUMB_MIN_SEC, AUTO_THUMB_MAX_SEC, ALLOW_OVERWRITE, DYNAMIC_PLAYLISTS
     global CURRENT_CONFIG_HASH
     global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST
+
+    # 1. Grund-Defaults (Hardcoded Fallbacks)
+    # Stellt sicher, dass bei einem Reload entfernte INI-Optionen wieder zurückfallen
+    in_dir = "/app/in"
+    work_dir = "/app/work"
+    done_dir = "/app/done"
+    corrupt_dir = "/app/corrupt"
+    log_file = "/app/yt-upload.log"
+    credentials_file = "/app/credentials.json"
+
+    default_description = ""
+    default_tags = ""
+    default_category = "22"
+    video_privacy = "unlisted"
+    video_language = "de"
+    allow_embedding = True
+    playlist_name = ""
+    auto_generate_thumbnail = True
+    auto_thumb_min_sec = 10
+    auto_thumb_max_sec = 60
+    allow_overwrite = False
+    enable_description_censor = False
+    dynamic_playlists = False
+    description_blacklist = []
 
     config = configparser.ConfigParser()
     config_files = []
@@ -124,10 +173,9 @@ def load_configuration(log_changes=False):
     if os.path.isdir(CONF_D_DIR):
         config_files.extend(sorted(glob.glob(os.path.join(CONF_D_DIR, "*.conf"))))
 
-    # Hash über Inhalte und Modifikationsdaten aller Config-Dateien bilden
+    # --- HASHING & DYNAMIC RELOAD ---
     hasher = hashlib.md5()
     file_list_names = []
-
     for cfg in config_files:
         try:
             rel_name = os.path.relpath(cfg, os.path.dirname(CONF_PATH)) if CONF_PATH else os.path.basename(cfg)
@@ -140,53 +188,79 @@ def load_configuration(log_changes=False):
             pass
 
     new_hash = hasher.hexdigest()
-
-    # Dynamic Reload Logging
     if log_changes and CURRENT_CONFIG_HASH and new_hash != CURRENT_CONFIG_HASH:
         files_str = ", ".join(file_list_names) if file_list_names else "conf.d"
         logging.info(f"🔄 Konfigurationsänderung erkannt (geändert: {files_str}). Synchronisiere...")
-
     CURRENT_CONFIG_HASH = new_hash
 
+    # --- Step 1: Config-Dateien parsen ---
     if config_files:
         config.read(config_files, encoding='utf-8')
 
-        # 2. Config-Datei(en) einlesen (upload.conf + conf.d/*.conf)
         if 'paths' in config:
-            IN_DIR = config.get('paths', 'in_dir', fallback=IN_DIR)
-            WORK_DIR = config.get('paths', 'work_dir', fallback=WORK_DIR)
-            DONE_DIR = config.get('paths', 'done_dir', fallback=DONE_DIR)
-            CORRUPT_DIR = config.get('paths', 'corrupt_dir', fallback=CORRUPT_DIR)
-            LOG_FILE = config.get('paths', 'log_file', fallback=LOG_FILE)
-            CREDENTIALS_FILE = config.get('paths', 'credentials_file', fallback=CREDENTIALS_FILE)
+            in_dir = config.get('paths', 'in_dir', fallback=in_dir)
+            work_dir = config.get('paths', 'work_dir', fallback=work_dir)
+            done_dir = config.get('paths', 'done_dir', fallback=done_dir)
+            corrupt_dir = config.get('paths', 'corrupt_dir', fallback=corrupt_dir)
+            log_file = config.get('paths', 'log_file', fallback=log_file)
+            credentials_file = config.get('paths', 'credentials_file', fallback=credentials_file)
 
         if 'settings' in config:
-            DEFAULT_DESCRIPTION = config.get('settings', 'default_description', fallback=DEFAULT_DESCRIPTION)
-            DEFAULT_TAGS = config.get('settings', 'default_tags', fallback=DEFAULT_TAGS)
-            DEFAULT_CATEGORY = config.get('settings', 'default_category', fallback=DEFAULT_CATEGORY)
-            VIDEO_PRIVACY = config.get('settings', 'privacy_status', fallback=VIDEO_PRIVACY)
-            VIDEO_LANGUAGE = config.get('settings', 'default_language', fallback=VIDEO_LANGUAGE)
-            ALLOW_EMBEDDING = config.getboolean('settings', 'allow_embedding', fallback=ALLOW_EMBEDDING)
-            PLAYLIST_NAME = config.get('settings', 'playlist_name', fallback=PLAYLIST_NAME)
-            AUTO_GENERATE_THUMBNAIL = config.getboolean('settings', 'auto_generate_thumbnail', fallback=AUTO_GENERATE_THUMBNAIL)
-            AUTO_THUMB_MIN_SEC = config.getint('settings', 'auto_thumb_min_sec', fallback=AUTO_THUMB_MIN_SEC)
-            AUTO_THUMB_MAX_SEC = config.getint('settings', 'auto_thumb_max_sec', fallback=AUTO_THUMB_MAX_SEC)
-            ALLOW_OVERWRITE = config.getboolean('settings', 'allow_overwrite', fallback=ALLOW_OVERWRITE)
-            ENABLE_DESCRIPTION_CENSOR = config.getboolean('settings', 'enable_description_censor', fallback=ENABLE_DESCRIPTION_CENSOR)
+            default_description = config.get('settings', 'default_description', fallback=default_description)
+            default_tags = config.get('settings', 'default_tags', fallback=default_tags)
+            default_category = config.get('settings', 'default_category', fallback=default_category)
+            video_privacy = config.get('settings', 'privacy_status', fallback=video_privacy)
+            video_language = config.get('settings', 'default_language', fallback=video_language)
+            allow_embedding = config.getboolean('settings', 'allow_embedding', fallback=allow_embedding)
+            playlist_name = config.get('settings', 'playlist_name', fallback=playlist_name)
+            auto_generate_thumbnail = config.getboolean('settings', 'auto_generate_thumbnail', fallback=auto_generate_thumbnail)
+            auto_thumb_min_sec = config.getint('settings', 'auto_thumb_min_sec', fallback=auto_thumb_min_sec)
+            auto_thumb_max_sec = config.getint('settings', 'auto_thumb_max_sec', fallback=auto_thumb_max_sec)
+            allow_overwrite = config.getboolean('settings', 'allow_overwrite', fallback=allow_overwrite)
+            enable_description_censor = config.getboolean('settings', 'enable_description_censor', fallback=enable_description_censor)
+            dynamic_playlists = config.getboolean('settings', 'enable_dynamic_playlists', fallback=dynamic_playlists)
 
         if 'blacklist' in config:
-            # Lese Schlüssel aus der INI
             ini_blacklist = [key.strip() for key in config.options('blacklist') if key.strip() != '__name__']
-            # Falls INI-Einträge existieren, nutze diese, ansonsten behalte den Wert aus der .env
             if ini_blacklist:
-                DESCRIPTION_BLACKLIST = ini_blacklist
+                description_blacklist = ini_blacklist
 
-    # 3. Dynamic Playlists (Env Var überschreibt Config, falls gesetzt)
-    DYNAMIC_PLAYLISTS = os.getenv(
-        "ENABLE_DYNAMIC_PLAYLISTS",
-        str(config.getboolean('settings', 'enable_dynamic_playlists', fallback=False) if config_files else "false")
-    ).lower() in ("1", "true", "yes")
+    # --- Step 2: Env-Vars überschreiben alles (höchste Priorität nach CLI) ---
+    IN_DIR = os.environ.get('IN_DIR', in_dir)
+    WORK_DIR = os.environ.get('WORK_DIR', work_dir)
+    DONE_DIR = os.environ.get('DONE_DIR', done_dir)
+    CORRUPT_DIR = os.environ.get('CORRUPT_DIR', corrupt_dir)
+    LOG_FILE = os.environ.get('LOG_FILE', log_file)
+    CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', credentials_file)
 
+    VIDEO_PRIVACY = os.environ.get('VIDEO_PRIVACY', video_privacy)
+    VIDEO_LANGUAGE = os.environ.get('VIDEO_LANGUAGE', video_language)
+    PLAYLIST_NAME = os.environ.get('PLAYLIST_NAME', playlist_name)
+    DEFAULT_DESCRIPTION = os.environ.get('DEFAULT_DESCRIPTION', default_description)
+    DEFAULT_TAGS = os.environ.get('DEFAULT_TAGS', default_tags)
+    DEFAULT_CATEGORY = os.environ.get('DEFAULT_CATEGORY', default_category)
+
+    if 'ENABLE_DYNAMIC_PLAYLISTS' in os.environ:
+        DYNAMIC_PLAYLISTS = os.environ['ENABLE_DYNAMIC_PLAYLISTS'].lower() in ('1', 'true', 'yes')
+    else:
+        DYNAMIC_PLAYLISTS = dynamic_playlists
+
+    if 'ENABLE_DESCRIPTION_CENSOR' in os.environ:
+        ENABLE_DESCRIPTION_CENSOR = os.environ['ENABLE_DESCRIPTION_CENSOR'].lower() in ('1', 'true', 'yes')
+    else:
+        ENABLE_DESCRIPTION_CENSOR = enable_description_censor
+
+    if 'DESCRIPTION_BLACKLIST' in os.environ:
+        _env_bl = os.environ['DESCRIPTION_BLACKLIST']
+        DESCRIPTION_BLACKLIST = [w.strip() for w in _env_bl.split(',') if w.strip()]
+    else:
+        DESCRIPTION_BLACKLIST = description_blacklist
+
+    ALLOW_EMBEDDING = allow_embedding
+    AUTO_GENERATE_THUMBNAIL = auto_generate_thumbnail
+    AUTO_THUMB_MIN_SEC = auto_thumb_min_sec
+    AUTO_THUMB_MAX_SEC = auto_thumb_max_sec
+    ALLOW_OVERWRITE = allow_overwrite
 
 # Erstmaliges Laden beim Modul-Import/Start
 load_configuration(log_changes=False)
@@ -1073,14 +1147,14 @@ def process_single_file(file_path, args=None):
     rec_date = (args.recording_date if args and args.recording_date else meta["date"])
     thumb_path = (args.thumbnail if args and args.thumbnail else meta["thumb_path"])
 
-    privacy = args.privacy if args and args.privacy else VIDEO_PRIVACY
+    privacy = (args.privacy if args and args.privacy else None) or VIDEO_PRIVACY
     publish_at = args.publish_at if args else None
-    license_type = args.license if args and args.license else "youtube"
+    license_type = (args.license if args and args.license else None) or "youtube"
     location = args.location if args else None
-    default_lang = args.default_language if args and args.default_language else VIDEO_LANGUAGE
-    default_audio_lang = args.default_audio_language if args and args.default_audio_language else VIDEO_LANGUAGE
-    embeddable = args.embeddable if args and args.embeddable is not None else ALLOW_EMBEDDING
-
+    default_lang = (args.default_language if args and args.default_language else None) or VIDEO_LANGUAGE
+    default_audio_lang = (args.default_audio_language if args and args.default_audio_language else None) or VIDEO_LANGUAGE
+    embeddable = args.embeddable if (args and args.embeddable is not None) else ALLOW_EMBEDDING
+    
     # Dynamisches oder festes Playlist-Mapping
     target_playlist = PLAYLIST_NAME
     if args and args.playlist:
@@ -1088,7 +1162,7 @@ def process_single_file(file_path, args=None):
     elif DYNAMIC_PLAYLISTS and meta["artist"]:
         target_playlist = meta["artist"]
 
-    cred_file = args.credentials_file if args else CREDENTIALS_FILE
+    cred_file = (args.credentials_file if args and args.credentials_file else None) or CREDENTIALS_FILE
     client_secrets = args.client_secrets if args else None
     chunksize = args.chunksize if args else 268435456
     open_link = args.open_link if args else False
@@ -1156,22 +1230,26 @@ def parse_arguments():
     parser.add_argument("-c", "--category", help="Kategorie ID oder Name (z.B. Entertainment, Gaming, 22)")
     parser.add_argument("-V", "--Version", action="version", version=f"{__title__} v{__version__}")
     parser.add_argument("--tags", help="Kommagetrennte Liste von Tags")
-    parser.add_argument("--privacy", choices=["public", "private", "unlisted"], default=VIDEO_PRIVACY, help="Sichtbarkeit")
+    
+    # WICHTIG: default=None statt default=VIDEO_PRIVACY
+    parser.add_argument("--privacy", choices=["public", "private", "unlisted"], default=None, help="Sichtbarkeit")
 
     parser.add_argument("--thumbnail", help="Pfad zu benutzerdefiniertem Thumbnail-Bild")
     parser.add_argument("--playlist", help="Name der Ziel-Playlist")
-    parser.add_argument("--publish-at", help="Geplante Veröffentlichung (ISO-Format 8601: YYYY-MM-DDTHH:MM:SS.sZ)")
-    parser.add_argument("--license", choices=["youtube", "creativeCommon"], default="youtube", help="Videolizenz")
+    parser.add_argument("--publish-at", help="Geplante Veröffentlichung (ISO-Format 8601)")
+    parser.add_argument("--license", choices=["youtube", "creativeCommon"], default=None, help="Videolizenz")
     parser.add_argument("--location", help="Geo-Koordinaten (Format: 'latitude=50.9,longitude=6.9')")
-    parser.add_argument("--recording-date", help="Aufnahmedatum (ISO-Format: YYYY-MM-DDTHH:MM:SS.sZ)")
+    parser.add_argument("--recording-date", help="Aufnahmedatum")
 
-    parser.add_argument("--default-language", default=VIDEO_LANGUAGE, help="Standardsprache des Titels/der Beschreibung")
-    parser.add_argument("--default-audio-language", default=VIDEO_LANGUAGE, help="Standardsprache des Audios")
-    parser.add_argument("--embeddable", action="store_true", default=ALLOW_EMBEDDING, help="Einbetten auf externen Seiten erlauben")
+    # WICHTIG: default=None statt default=VIDEO_LANGUAGE / ALLOW_EMBEDDING
+    parser.add_argument("--default-language", default=None, help="Standardsprache des Titels/der Beschreibung")
+    parser.add_argument("--default-audio-language", default=None, help="Standardsprache des Audios")
+    parser.add_argument("--embeddable", action="store_true", default=None, help="Einbetten auf externen Seiten erlauben")
 
-    parser.add_argument("--credentials-file", default=CREDENTIALS_FILE, help="Pfad zur OAuth Credentials JSON")
+    # WICHTIG: default=None statt default=CREDENTIALS_FILE
+    parser.add_argument("--credentials-file", default=None, help="Pfad zur OAuth Credentials JSON")
     parser.add_argument("--client-secrets", help="Pfad zur Google Client Secrets JSON")
-    parser.add_argument("--chunksize", type=int, default=268435456, help="Upload Chunk-Größe in Bytes (Standard: 256 MB)")
+    parser.add_argument("--chunksize", type=int, default=268435456, help="Upload Chunk-Größe in Bytes")
     parser.add_argument("--open-link", action="store_true", help="Nach Upload Video-URL im Standardbrowser öffnen")
 
     return parser.parse_args()
