@@ -13,6 +13,7 @@ app/
 *.bak
 client_secrets.json
 youtube-upload-credentials.json
+.secrets
 *.new
 *.log
 *.diff
@@ -20,6 +21,7 @@ youtube-upload-credentials.json
 __pycache__/
 *.pyc
 docker-compose.override.yaml
+
 # Environminet Datei ausschließen
 .env
 
