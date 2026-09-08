@@ -97,6 +97,11 @@ DYNAMIC_PLAYLISTS = False
 # Globale Variable zur Tracking-Vergleichs-Hash-Verwaltung der Configs
 CURRENT_CONFIG_HASH = ""
 
+# Globale Variable für die Zensur-Funktionalität der Video-Beschreibung
+ENABLE_DESCRIPTION_CENSOR = os.environ.get('ENABLE_DESCRIPTION_CENSOR', 'false').lower() in ('true', 'yes', '1')
+_env_blacklist = os.environ.get('DESCRIPTION_BLACKLIST', '')
+DESCRIPTION_BLACKLIST = [w.strip() for w in _env_blacklist.split(',') if w.strip()]
+
 
 def load_configuration(log_changes=False):
     """
@@ -108,6 +113,7 @@ def load_configuration(log_changes=False):
     global VIDEO_LANGUAGE, ALLOW_EMBEDDING, PLAYLIST_NAME, AUTO_GENERATE_THUMBNAIL
     global AUTO_THUMB_MIN_SEC, AUTO_THUMB_MAX_SEC, ALLOW_OVERWRITE, DYNAMIC_PLAYLISTS
     global CURRENT_CONFIG_HASH
+    global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST
 
     config = configparser.ConfigParser()
     config_files = []
@@ -166,6 +172,10 @@ def load_configuration(log_changes=False):
             AUTO_THUMB_MIN_SEC = config.getint('settings', 'auto_thumb_min_sec', fallback=AUTO_THUMB_MIN_SEC)
             AUTO_THUMB_MAX_SEC = config.getint('settings', 'auto_thumb_max_sec', fallback=AUTO_THUMB_MAX_SEC)
             ALLOW_OVERWRITE = config.getboolean('settings', 'allow_overwrite', fallback=ALLOW_OVERWRITE)
+            ENABLE_DESCRIPTION_CENSOR = config.getboolean('settings', 'enable_description_censor', fallback=ENABLE_DESCRIPTION_CENSOR)
+
+        if 'blacklist' in config:
+            DESCRIPTION_BLACKLIST = [key.strip() for key in config.options('blacklist') if key.strip() != '__name__']
 
     # 3. Dynamic Playlists (Env Var überschreibt Config, falls gesetzt)
     DYNAMIC_PLAYLISTS = os.getenv(
@@ -623,6 +633,33 @@ def extract_metadata_and_thumb(file_path):
 
 
 # ==========================================
+# BESCHREIBUNGS-ZENSUR
+# ==========================================
+def censor_text(text: str) -> str:
+    """
+    Zensiert sensible Begriffe in Texten (Titel oder Beschreibung)
+    anhand der Konfigurations-Blacklist.
+    """
+    if not ENABLE_DESCRIPTION_CENSOR or not text:
+        return text
+
+    if DESCRIPTION_BLACKLIST:
+        escaped_words = [re.escape(word) for word in DESCRIPTION_BLACKLIST if word.strip()]
+        if escaped_words:
+            # \b funktioniert bei Domains oft nicht perfekt vor Punkten,
+            # daher nutzen wir hier einen flexibleren Ansatz für Wörter und Domains
+            pattern = re.compile(r'(?i)' + '|'.join(escaped_words))
+
+            def replace_match(match):
+                matched_str = match.group(0)
+                # Entweder kompletter Sternchen-Ersatz oder ein fixer Platzhalter
+                return '*' * len(matched_str)
+
+            text = pattern.sub(replace_match, text)
+
+    return text
+
+# ==========================================
 # FFMPEG LOSSLESS SPLITTER
 # ==========================================
 def split_video_if_needed(work_path):
@@ -1020,9 +1057,13 @@ def process_single_file(file_path, args=None):
     # Metadaten & Thumbnail auslesen
     meta = extract_metadata_and_thumb(work_path)
 
+    # für die Zensur vorbereiten
+    raw_title = (args.title if args and args.title else meta["title"]) or os.path.splitext(filename)[0]
+    raw_desc = (args.description if args and args.description else meta["description"]) or DEFAULT_DESCRIPTION
+
     # CLI-Overrides oder Fallbacks
-    title_base = (args.title if args and args.title else meta["title"]) or os.path.splitext(filename)[0]
-    desc_base = (args.description if args and args.description else meta["description"]) or DEFAULT_DESCRIPTION
+    title_base = censor_text(raw_title)
+    desc_base = censor_text(raw_desc) # Zensur anwenden
     category = (args.category if args and args.category else meta["genre"]) or DEFAULT_CATEGORY
     tags = (args.tags if args and args.tags else meta["genre"]) or DEFAULT_TAGS
     rec_date = (args.recording_date if args and args.recording_date else meta["date"])

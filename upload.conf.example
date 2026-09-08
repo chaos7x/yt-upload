@@ -42,6 +42,9 @@
 # Standard-Beschreibungstext, falls keine Metadaten/CLI-Argumente vorhanden sind
 #default_description = Automatischer Upload via Script.
 
+# Aktiviert die Zensurfunktion für die description
+#enable_description_censor = false
+
 # Standard-Tags (kommagetrennt)
 #default_tags = Upload, Video
 
@@ -56,3 +59,8 @@
 
 # Bei Namenskonflikten in DONE/CORRUPT Dateien überschreiben statt umzubenennen (true/false)
 #allow_overwrite = true
+
+[blacklist]
+#onlyfans.com = true
+#fansly.com = true
+#geheim = true
