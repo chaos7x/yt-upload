@@ -356,7 +356,7 @@ def find_existing_video(target_dir=IN_DIR):
     return None
 
 
-def wait_for_input(target_dir=IN_DIR):
+def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
     # Prüfe vor der Suche auf geänderte Config-Dateien
     load_configuration(log_changes=True)
 
@@ -368,8 +368,9 @@ def wait_for_input(target_dir=IN_DIR):
     logging.info(f"Warte via inotify auf neue Dateien in {target_dir}...")
     valid_exts = (".mp4", ".mkv", ".mov", ".m4v")
 
-    if not HAS_INOTIFY:
-        logging.warning("inotify-Modul nicht verfügbar, nutze Polling-Fallback.")
+    if not HAS_INOTIFY or inotify_adapter is None:
+        if not HAS_INOTIFY:
+            logging.warning("inotify-Modul nicht verfügbar, nutze Polling-Fallback.")
         while True:
             time.sleep(10)
             load_configuration(log_changes=True)
@@ -377,11 +378,10 @@ def wait_for_input(target_dir=IN_DIR):
             if existing:
                 return existing
 
-    i = inotify.adapters.InotifyTree(target_dir) # type: ignore
-
+    # Nutze die übergebene InotifyTree-Instanz
     while True:
         try:
-            for event in i.event_gen(yield_nones=False, timeout_s=10):
+            for event in inotify_adapter.event_gen(yield_nones=False, timeout_s=10):
                 # Prüfe bei jedem Timeout/Event die Konfigurations-Hashes
                 load_configuration(log_changes=True)
 
@@ -1213,9 +1213,19 @@ def main():
     # 3. Dauerhafter Dämon-Modus
     elif args.daemon:
         logging.info(f"Starte Dämon-Modus mit inotify-Überwachung auf {IN_DIR}...")
+
+        # Inotify-Tree einmalig vor der Hauptschleife erzeugen
+        inotify_adapter = None
+        if HAS_INOTIFY:
+            try:
+                inotify_adapter = inotify.adapters.InotifyTree(IN_DIR)
+                logging.info(f"InotifyTree erfolgreich auf {IN_DIR} initialisiert.")
+            except Exception as e:
+                logging.error(f"Konnte InotifyTree nicht initialisieren: {e}")
+
         try:
             while True:
-                input_file = wait_for_input(IN_DIR)
+                input_file = wait_for_input(IN_DIR, inotify_adapter=inotify_adapter)
                 if input_file:
                     process_single_file(input_file, args)
         except KeyboardInterrupt:
