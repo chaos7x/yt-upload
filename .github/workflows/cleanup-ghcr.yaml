@@ -1,0 +1,17 @@
+name: Cleanup Untagged GHCR Images
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Delete untagged images
+        uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          package: yt-upload
+          delete-untagged: true
+          dry-run: false
