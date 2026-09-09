@@ -86,6 +86,8 @@ services:
       - TZ=Europe/Berlin
       - ENABLE_DYNAMIC_PLAYLISTS=true
       - HOME=/tmp
+      - ENABLE_DESCRIPTION_CENSOR=true
+      - DESCRIPTION_BLACKLIST="onlyfans.com,fansly.com,loyalfans.com,manyvids.com,pornhub.com,chaturbate.com,stake.com,csgoroll.com,hellcase.com,1xbet.com,adf.ly,shorte.st"
     env_file:
       - .env
     volumes:
