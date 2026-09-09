@@ -91,13 +91,42 @@ services:
     env_file:
       - .env
     volumes:
-      - ./oauth:/app/oauth
-      - ./videos:/videos
-      - ./log:/log
-      - ./config:/etc/yt-upload
+      - oauth:/app/oauth
+      - videos:/videos
+      - log:/log
+      - config:/etc/yt-upload
 
     tty: true
     stdin_open: true
+
+volumes:
+  app:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "./app"
+
+  oauth:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "./oauth"
+
+  videos:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "./videos"
+
+  log:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "./log"
 ```
 💻 CLI & Parameter Übersicht
 ```text
