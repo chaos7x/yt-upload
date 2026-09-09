@@ -54,7 +54,7 @@ fi
 
 echo "🔨 Baue lokales Docker-Image (${IMAGE_TAG}) mit ${DOCKERFILE}..."
 
-docker build -f "$DOCKERFILE" \
+docker build --pull -f "$DOCKERFILE" \
   --build-arg VERSION="$VERSION" \
   --build-arg BUILD_DATE="$BUILD_DATE" \
   --build-arg YT_UPLOAD_REF="$YT_UPLOAD_REF" \
