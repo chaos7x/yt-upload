@@ -19,8 +19,8 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   
-      packages: write   
+      contents: write
+      packages: write
 
     strategy:
       matrix:
@@ -31,6 +31,9 @@ jobs:
             suffix: "-alpine"
 
     steps:
+      - name: Datum ermitteln
+        run: echo "BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_ENV
+
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
