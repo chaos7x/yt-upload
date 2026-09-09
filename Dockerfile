@@ -9,14 +9,6 @@ FROM mwader/static-ffmpeg:latest AS ffmpeg-binaries
 # ==========================================
 FROM debian:trixie-slim
 
-ARG VERSION
-ARG BUILD_DATE
-
-LABEL version="${VERSION}"
-LABEL build_date="${BUILD_DATE}"
-LABEL maintainer="Chaos7x"
-LABEL purpose="YouTube upload automation with ffmpeg + python"
-
 # ------------------------------------------
 # LAYER 1: FFmpeg Binaries aus STUFE 0 kopieren
 # ------------------------------------------
@@ -62,3 +54,11 @@ RUN ln -s /etc/global.bashrc /tmp/.bashrc \
     && ln -s /etc/global.bashrc /app/.bashrc
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+ARG VERSION
+ARG BUILD_DATE
+
+LABEL version="${VERSION}"
+LABEL build_date="${BUILD_DATE}"
+LABEL maintainer="Chaos7x"
+LABEL purpose="YouTube upload automation with ffmpeg + python"

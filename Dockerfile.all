@@ -1,14 +1,6 @@
 FROM mwader/static-ffmpeg:latest AS ffmpeg-binaries
 FROM debian:trixie-slim
 
-ARG VERSION
-ARG BUILD_DATE
-
-LABEL version="${VERSION}"
-LABEL build_date="${BUILD_DATE}"
-LABEL maintainer="Chaos7x"
-LABEL purpose="YouTube upload automation with ffmpeg + mc + inotify"
-
 # ==========================================
 # STUFE 1: Statische Binaries kopieren (Dauert 0 Sekunden)
 # ==========================================
@@ -56,3 +48,11 @@ RUN ln -s /etc/global.bashrc /app/.bashrc
 ENV HOME=/app
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+ARG VERSION
+ARG BUILD_DATE
+
+LABEL version="${VERSION}"
+LABEL build_date="${BUILD_DATE}"
+LABEL maintainer="Chaos7x"
+LABEL purpose="YouTube upload automation with ffmpeg + mc + inotify"
