@@ -176,6 +176,29 @@ apt install python3-requests python3-inotify
 
 # Bei Namenskonflikten in DONE/CORRUPT Dateien überschreiben statt umzubenennen (true/false)
 #allow_overwrite = true
+
+# Aktiviert die Zensurfunktion für die description
+#enable_description_censor = false
+
+[blacklist]
+# Adult / NSFW
+#onlyfans.com = true
+#fansly.com = true
+#loyalfans.com = true
+#manyvids.com = true
+#pornhub.com = true
+#chaturbate.com = true
+
+# Gambling & Skins
+#stake.com = true
+#csgoroll.com = true
+#hellcase.com = true
+#1xbet.com = true
+
+# Adfly & Spammige Shortener
+#adf.ly = true
+#shorte.st = true
+
 ```
 
 ### Wichtige CLI-Flags
