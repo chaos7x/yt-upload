@@ -1,6 +1,11 @@
 #!/bin/sh
 
-# Docker startet den Recorder standardmäßig im Daemon-Modus.
+# Prüfen, ob ein gültiger Systembefehl oder absoluter Pfad als erstes Argument übergeben wurde
+if [ "$#" -gt 0 ] && ( [ -x "$1" ] || command -v "$1" >/dev/null 2>&1 ); then
+    exec "$@"
+fi
+
+# Docker startet den Recorder standardmäßig im Daemon-Modus, wenn keine Argumente übergeben werden
 if [ "$#" -eq 0 ]; then
     set -- -D
 fi
