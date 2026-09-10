@@ -99,9 +99,8 @@ jobs:
           build-args: |
             VERSION=${{ steps.bump_version.outputs.version }}
             BUILD_DATE=${{ steps.date.outputs.date }}
-           cache-from: type=gha
+          cache-from: type=gha
           cache-to: type=gha,mode=max
-
 
       - name: GitHub Release & Git-Tag erstellen
         if: matrix.suffix == '' # Verhindert, dass das Release doppelt erstellt wird
