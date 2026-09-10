@@ -27,7 +27,7 @@ SYSTEM-VORAUSSETZUNGEN:
 """
 
 __title__ = "YouTube Video Uploader & CLI-Uploader"
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 import argparse
 import configparser
@@ -1162,6 +1162,10 @@ def process_single_file(file_path, args=None):
 
     raw_title = (args.title if args and args.title else meta["title"]) or os.path.splitext(filename)[0]
     raw_desc = (args.description if args and args.description else meta["description"]) or DEFAULT_DESCRIPTION
+
+    # Falls eine PURL in den Metadaten vorhanden ist und noch nicht im Beschreibungstext steht, unten anhängen
+    if meta.get("purl") and meta["purl"] not in raw_desc:
+        raw_desc = f"{raw_desc}\n\nQuelle: {meta['purl']}"
 
     # Zensur-Filter auf Titel und Beschreibung anwenden
     title_base = censor_text(raw_title)
