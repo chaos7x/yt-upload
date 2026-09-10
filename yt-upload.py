@@ -27,7 +27,7 @@ SYSTEM-VORAUSSETZUNGEN:
 """
 
 __title__ = "YouTube Video Uploader & CLI-Uploader"
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 import argparse
 import configparser
@@ -564,6 +564,9 @@ def sanitize_text(text):
     """Entfernt Steuerzeichen und nicht-druckbare Unicode-Zeichen aus Texten."""
     if not text:
         return text
+    # < und > für YouTube API bereinigen
+    text = text.replace("<", "").replace(">", "")
+
     normalized = unicodedata.normalize('NFKD', text)
     cleaned_chars = [c for c in normalized if unicodedata.category(c) not in ('Mn', 'So')]
     result = unicodedata.normalize('NFC', ''.join(cleaned_chars))
