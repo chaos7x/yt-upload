@@ -564,7 +564,11 @@ def sanitize_text(text):
     """Entfernt Steuerzeichen und nicht-druckbare Unicode-Zeichen aus Texten."""
     if not text:
         return text
-    # < und > für YouTube API bereinigen
+
+    # <3 in ein echtes Herz-Symbol umwandeln, bevor spitze Klammern gefiltert werden
+    text = text.replace("<3", "♥")
+
+    # Restliche < und > für die YouTube API bereinigen
     text = text.replace("<", "").replace(">", "")
 
     normalized = unicodedata.normalize('NFKD', text)
@@ -1165,6 +1169,9 @@ def process_single_file(file_path, args=None):
 
     raw_title = (args.title if args and args.title else meta["title"]) or os.path.splitext(filename)[0]
     raw_desc = (args.description if args and args.description else meta["description"]) or DEFAULT_DESCRIPTION
+
+    # Beschreibung durch den Filter schicken, um < und > zu entfernen
+    raw_desc = sanitize_text(raw_desc)
 
     # Falls eine PURL in den Metadaten vorhanden ist und noch nicht im Beschreibungstext steht, unten anhängen
     if meta.get("purl") and meta["purl"] not in raw_desc:
