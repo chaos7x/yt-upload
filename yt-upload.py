@@ -27,13 +27,12 @@ SYSTEM-VORAUSSETZUNGEN:
 """
 
 __title__ = "YouTube Video Uploader & CLI-Uploader"
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 import argparse
 import configparser
 import glob
 import hashlib
-from importlib import metadata
 import json
 import logging
 import os
@@ -149,7 +148,6 @@ def load_configuration(log_changes=False):
     enable_description_censor = ENABLE_DESCRIPTION_CENSOR
     dynamic_playlists = DYNAMIC_PLAYLISTS
 
-    # Initialisiere ein Set für die additive Zusammenführung aus INI und ENV
     combined_blacklist = set(DESCRIPTION_BLACKLIST) if DESCRIPTION_BLACKLIST else set()
 
     config = configparser.ConfigParser()
@@ -208,7 +206,6 @@ def load_configuration(log_changes=False):
             enable_description_censor = config.getboolean('settings', 'enable_description_censor', fallback=enable_description_censor)
             dynamic_playlists = config.getboolean('settings', 'enable_dynamic_playlists', fallback=dynamic_playlists)
 
-        # Einlesen und Hinzufügen der Wort-Blacklist aus Sektion [blacklist]
         if 'blacklist' in config:
             for key in config.options('blacklist'):
                 if key.strip() != '__name__':
@@ -241,7 +238,6 @@ def load_configuration(log_changes=False):
     else:
         ENABLE_DESCRIPTION_CENSOR = enable_description_censor
 
-    # ENV DESCRIPTION_BLACKLIST wird additiv in das Set gemappt
     if 'DESCRIPTION_BLACKLIST' in os.environ:
         _env_bl = os.environ['DESCRIPTION_BLACKLIST']
         for w in _env_bl.split(','):
@@ -249,7 +245,6 @@ def load_configuration(log_changes=False):
             if cleaned:
                 combined_blacklist.add(cleaned)
 
-    # Finale Liste sortiert zurückschreiben
     DESCRIPTION_BLACKLIST = sorted(list(combined_blacklist))
 
     ALLOW_EMBEDDING = allow_embedding
@@ -470,8 +465,9 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
                 if any(t in type_names for t in ["IN_CLOSE_WRITE", "IN_MOVED_TO"]):
                     if filename.lower().endswith(valid_exts):
                         full_path = os.path.join(path, filename)
-                        logging.info(f"Datei erfolgreich via inotify erkannt: {full_path}")
-                        return full_path
+                        if os.path.isfile(full_path):
+                            logging.info(f"Datei erfolgreich via inotify erkannt: {full_path}")
+                            return full_path
         except Exception as e:
             logging.error(f"Fehler beim Inotify-Observer: {e}")
             time.sleep(5)
@@ -561,19 +557,19 @@ def normalize_recording_date(value):
 
 
 def sanitize_text(text):
-    """Entfernt Steuerzeichen und nicht-druckbare Unicode-Zeichen aus Texten."""
+    """Entfernt Steuerzeichen und ungültige Klammern (<, >) für die YouTube API."""
     if not text:
         return text
 
-    # <3 in ein echtes Herz-Symbol umwandeln, bevor spitze Klammern gefiltert werden
+    # Kurzform <3 in Herz umwandeln
     text = text.replace("<3", "♥")
 
-    # Restliche < und > für die YouTube API bereinigen
+    # Spitzeichen für die API entfernen
     text = text.replace("<", "").replace(">", "")
 
-    normalized = unicodedata.normalize('NFKD', text)
-    cleaned_chars = [c for c in normalized if unicodedata.category(c) not in ('Mn', 'So')]
-    result = unicodedata.normalize('NFC', ''.join(cleaned_chars))
+    # Steuerzeichen entfernen, Unicode-Symbole & Umlaute beibehalten
+    cleaned_chars = [c for c in text if unicodedata.category(c) != 'Cc']
+    result = ''.join(cleaned_chars)
     return re.sub(r'\s+', ' ', result).strip()
 
 
@@ -732,7 +728,6 @@ def censor_text(text: str) -> str:
     if DESCRIPTION_BLACKLIST:
         escaped_words = [re.escape(word) for word in DESCRIPTION_BLACKLIST if word.strip()]
         if escaped_words:
-            # Case-insensitive Match aller Blacklist-Begriffe
             pattern = re.compile(r'(?i)' + '|'.join(escaped_words))
 
             def replace_match(match):
@@ -776,7 +771,6 @@ def split_video_if_needed(work_path):
     base_name, ext = os.path.splitext(filename)
     segment_pattern = os.path.join(WORK_DIR, f"{base_name}_part%02d{ext}")
 
-    # Bereinige alte Rest-Segmente gleicher Benennung
     for item in os.listdir(WORK_DIR):
         if item.startswith(f"{base_name}_part") and item.endswith(ext):
             stale_segment = os.path.join(WORK_DIR, item)
@@ -830,7 +824,6 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
         playlist_id = None
         next_page = None
 
-        # Playlists des Kanals abfragen
         while True:
             list_url = f"https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50"
             if next_page:
@@ -852,7 +845,6 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                 logging.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {res.text}")
                 break
 
-        # Neue Playlist erstellen, wenn keine passenden Treffer vorliegen
         if not playlist_id:
             create_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet,status"
             create_body = {
@@ -863,7 +855,6 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
             if create_res.status_code in (200, 201):
                 playlist_id = create_res.json().get("id")
 
-        # Video der Playlist zuweisen (mit Retry-Logik für 409 / 5xx)
         if playlist_id:
             item_url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet"
             item_body = {
@@ -883,7 +874,6 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                     logging.info(f"Video {video_id} erfolgreich zur Playlist '{playlist_name}' hinzugefügt.")
                     return True
 
-                # Bei temporären Fehlern (409 ABORTED, 500, 502, 503, 504) wiederholen
                 if item_res.status_code in (409, 500, 502, 503, 504) and attempt < max_retries:
                     logging.warning(
                         f"YouTube API meldet {item_res.status_code} beim Playlist-Assignment. "
@@ -945,13 +935,11 @@ def upload_single_video(
 
     session = requests.Session()
 
-    # Validierung der Chunk-Größe für Resumable Uploads (Vielfaches von 256 KiB)
     if chunksize % CHUNK_UNIT_BYTES != 0:
         adjusted_chunksize = max(CHUNK_UNIT_BYTES, (chunksize // CHUNK_UNIT_BYTES) * CHUNK_UNIT_BYTES)
         logging.info(f"Chunksize angepasst auf Vielfaches von 256 KiB: {chunksize} -> {adjusted_chunksize} Bytes")
         chunksize = adjusted_chunksize
 
-    # Tag-Formatierung und -Validierung
     clean_tags = []
     if isinstance(tags, list):
         tags_list = tags
@@ -1018,7 +1006,6 @@ def upload_single_video(
     if "recordingDetails" in metadata_body:
         parts += ",recordingDetails"
 
-    # Step 1: Initialisierung der Resumable Upload Session
     init_url = f"https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part={parts}"
     init_headers = {
         "Authorization": f"Bearer {access_token}",
@@ -1039,7 +1026,6 @@ def upload_single_video(
 
     logging.info(f"Starte Chunk-Upload ({file_size / (1024 * 1024):.2f} MB) mit Chunksize {chunksize / (1024 * 1024):.1f} MB...")
 
-    # Step 2: Übertragung in Chunks mit automatischer Retry-Logik
     max_retries = 5
     video_id = None
     uploaded_bytes = 0
@@ -1063,7 +1049,6 @@ def upload_single_video(
                 try:
                     put_res = session.put(upload_url, headers=chunk_headers, data=chunk, timeout=120)
 
-                    # HTTP 200/201: Upload vollständig beendet
                     if put_res.status_code in (200, 201):
                         resp_data = put_res.json()
                         video_id = resp_data.get("id")
@@ -1072,7 +1057,6 @@ def upload_single_video(
                         logging.info(f"Upload ERFOLGREICH abgeschlossen! Video-ID: {video_id}")
                         break
 
-                    # HTTP 308 Resume Incomplete: Chunk erfolgreich verarbeitet
                     elif put_res.status_code == 308:
                         range_hdr = put_res.headers.get("Range")
                         if range_hdr and "-" in range_hdr:
@@ -1089,7 +1073,6 @@ def upload_single_video(
                         chunk_success = True
                         break
 
-                    # Token abgelaufen während des Uploads
                     elif put_res.status_code in (401, 403):
                         access_token = get_access_token(cred_file, client_secrets_file)
                         chunk_headers["Authorization"] = f"Bearer {access_token}"
@@ -1102,7 +1085,6 @@ def upload_single_video(
             if not chunk_success:
                 raise RuntimeError("Max Retries beim Upload überschritten.")
 
-    # Step 3: Post-Upload Aktionen (Thumbnail setzen, Playlist zuweisen)
     try:
         if video_id:
             if thumb_path and os.path.exists(thumb_path):
@@ -1167,43 +1149,40 @@ def process_single_file(file_path, args=None):
 
     meta = extract_metadata_and_thumb(work_path)
 
-    raw_title = (args.title if args and args.title else meta["title"]) or os.path.splitext(filename)[0]
-    raw_desc = (args.description if args and args.description else meta["description"]) or DEFAULT_DESCRIPTION
+    raw_title = (args.title if args and hasattr(args, 'title') and args.title else meta["title"]) or os.path.splitext(filename)[0]
+    raw_desc = (args.description if args and hasattr(args, 'description') and args.description else meta["description"]) or DEFAULT_DESCRIPTION
 
-    # Beschreibung durch den Filter schicken, um < und > zu entfernen
     raw_desc = sanitize_text(raw_desc)
 
-    # Falls eine PURL in den Metadaten vorhanden ist und noch nicht im Beschreibungstext steht, unten anhängen
     if meta.get("purl") and meta["purl"] not in raw_desc:
         raw_desc = f"{raw_desc}\n\nQuelle: {meta['purl']}"
 
-    # Zensur-Filter auf Titel und Beschreibung anwenden
     title_base = censor_text(raw_title)
     desc_base = censor_text(raw_desc)
 
-    category = (args.category if args and args.category else meta["genre"]) or DEFAULT_CATEGORY
-    tags = (args.tags if args and args.tags else meta["genre"]) or DEFAULT_TAGS
-    rec_date = (args.recording_date if args and args.recording_date else meta["date"])
-    thumb_path = (args.thumbnail if args and args.thumbnail else meta["thumb_path"])
+    category = (args.category if args and hasattr(args, 'category') and args.category else meta["genre"]) or DEFAULT_CATEGORY
+    tags = (args.tags if args and hasattr(args, 'tags') and args.tags else meta["genre"]) or DEFAULT_TAGS
+    rec_date = (args.recording_date if args and hasattr(args, 'recording_date') and args.recording_date else meta["date"])
+    thumb_path = (args.thumbnail if args and hasattr(args, 'thumbnail') and args.thumbnail else meta["thumb_path"])
 
-    privacy = (args.privacy if args and args.privacy else None) or VIDEO_PRIVACY
-    publish_at = args.publish_at if args else None
-    license_type = (args.license if args and args.license else None) or "youtube"
-    location = args.location if args else None
-    default_lang = (args.default_language if args and args.default_language else None) or VIDEO_LANGUAGE
-    default_audio_lang = (args.default_audio_language if args and args.default_audio_language else None) or VIDEO_LANGUAGE
-    embeddable = args.embeddable if (args and args.embeddable is not None) else ALLOW_EMBEDDING
+    privacy = (args.privacy if args and hasattr(args, 'privacy') and args.privacy else None) or VIDEO_PRIVACY
+    publish_at = args.publish_at if args and hasattr(args, 'publish_at') else None
+    license_type = (args.license if args and hasattr(args, 'license') and args.license else None) or "youtube"
+    location = args.location if args and hasattr(args, 'location') else None
+    default_lang = (args.default_language if args and hasattr(args, 'default_language') and args.default_language else None) or VIDEO_LANGUAGE
+    default_audio_lang = (args.default_audio_language if args and hasattr(args, 'default_audio_language') and args.default_audio_language else None) or VIDEO_LANGUAGE
+    embeddable = args.embeddable if (args and hasattr(args, 'embeddable') and args.embeddable is not None) else ALLOW_EMBEDDING
     
     target_playlist = PLAYLIST_NAME
-    if args and args.playlist:
+    if args and hasattr(args, 'playlist') and args.playlist:
         target_playlist = args.playlist
     elif DYNAMIC_PLAYLISTS and meta["artist"]:
         target_playlist = meta["artist"]
 
-    cred_file = (args.credentials_file if args and args.credentials_file else None) or CREDENTIALS_FILE
-    client_secrets = args.client_secrets if args else None
-    chunksize = args.chunksize if args else 268435456
-    open_link = args.open_link if args else False
+    cred_file = (args.credentials_file if args and hasattr(args, 'credentials_file') and args.credentials_file else None) or CREDENTIALS_FILE
+    client_secrets = args.client_secrets if args and hasattr(args, 'client_secrets') else None
+    chunksize = args.chunksize if args and hasattr(args, 'chunksize') else 268435456
+    open_link = args.open_link if args and hasattr(args, 'open_link') else False
 
     segments = split_video_if_needed(work_path)
 
@@ -1264,7 +1243,7 @@ def parse_arguments():
     parser.add_argument("-t", "--title", help="Video-Titel (Standard: Metadaten/Dateiname)")
     parser.add_argument("-d", "--description", help="Video-Beschreibung")
     parser.add_argument("-c", "--category", help="Kategorie ID oder Name (z.B. Entertainment, Gaming, 22)")
-    parser.add_argument("-V", "--Version", action="version", version=f"{__title__} v{__version__}")
+    parser.add_argument("-v", "--version", action="version", version=f"{__title__} v{__version__}")
     parser.add_argument("--tags", help="Kommagetrennte Liste von Tags")
     
     parser.add_argument("--privacy", choices=["public", "private", "unlisted"], default=None, help="Sichtbarkeit")
@@ -1290,9 +1269,7 @@ def parse_arguments():
 
 def main():
     """Hauptablaufsteuerung abhängig von den übergebenen Parametern."""
-    # 1. Konfiguration zuerst laden, damit LOG_FILE, IN_DIR etc. für Logging & Dirs stimmen
     load_configuration(log_changes=False)
-
     ensure_directories()
 
     logging.basicConfig(
@@ -1323,7 +1300,7 @@ def main():
             if not file_to_process:
                 logging.info("Keine weiteren Dateien im Eingangsverzeichnis gefunden.")
                 break
-            process_single_file(file_to_process, args)
+            process_single_file(file_to_process, args=None)
 
     # Modus 3: Dämonen-Modus – Dauerhafte Überwachung mittels Inotify
     elif args.daemon:
@@ -1334,10 +1311,8 @@ def main():
 
         try:
             while True:
-                # Prüfe/Lade Konfiguration bei jedem Durchlauf (aktualisiert ggf. IN_DIR)
                 load_configuration(log_changes=True)
 
-                # Re-Initialisiere inotify, falls sich IN_DIR geändert hat oder der Adapter fehlt
                 if HAS_INOTIFY and current_watched_dir != IN_DIR:
                     try:
                         logging.info(f"Initialisiere InotifyTree auf: {IN_DIR}")
@@ -1349,7 +1324,7 @@ def main():
 
                 input_file = wait_for_input(IN_DIR, inotify_adapter=inotify_adapter)
                 if input_file:
-                    process_single_file(input_file, args)
+                    process_single_file(input_file, args=None)
         except KeyboardInterrupt:
             logging.info("Dämon-Modus beendet.")
 
