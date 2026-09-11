@@ -167,6 +167,9 @@ apt install python3-requests python3-inotify
 # Zielverzeichnis für fehlerhafte oder unvollständige Dateien
 #corrupt_dir = /videos/corrupt
 
+# Zielverzeichnis für Dateien aus diversen gründen noch mal hochgeladen weden müssen
+#retry_dir = /videos/retry
+
 # Pfad zur zentralen Logdatei
 #log_file = /log/upload.log
 
