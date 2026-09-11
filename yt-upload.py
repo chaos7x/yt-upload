@@ -49,6 +49,7 @@ from datetime import datetime, timezone
 
 # ------------------------------------------------------------------------------
 # Debug-Modus über Umgebungsvariable 'DEBUG' setzen
+# Prüft, ob 'DEBUG' in den Umgebungsvariablen aktiv gesetzt ist (true/yes/1).
 # ------------------------------------------------------------------------------
 if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
     os.environ['DEBUG'] = '1'
@@ -57,6 +58,7 @@ else:
 
 # ------------------------------------------------------------------------------
 # Inotify Import-Prüfung (Echtzeit-Dateisystemüberwachung unter Linux)
+# Versucht das pyinotify bzw. inotify Modul zu laden, um Polling zu vermeiden.
 # ------------------------------------------------------------------------------
 try:
     import inotify.adapters
@@ -67,6 +69,7 @@ except ImportError:
 
 # ==============================================================================
 # KONFIGURATION & STANDARD-PFADE
+# Pfade werden primär aus Umgebungsvariablen bezogen oder auf Default-Werte gesetzt.
 # ==============================================================================
 CONF_PATH = os.environ.get('CONFIG_FILE', '/etc/yt-upload/upload.conf')
 CONF_D_DIR = os.environ.get('CONF_D_DIR', os.path.join(os.path.dirname(CONF_PATH), 'conf.d'))
@@ -83,7 +86,7 @@ CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', "/app/oauth/youtube-upload
 
 # YouTube Limitierungen & Netzwerk-Chunk-Spezifikationen
 SEGMENT_TIME_SEC = 36000     # Maximum 10 Stunden pro Video vor automatischem Splitting
-CHUNK_UNIT_BYTES = 262144    # 256 KiB Basis-Einheit für Resumable Chunk Uploads
+CHUNK_UNIT_BYTES = 262144    # 256 KiB Basis-Einheit für Resumable Chunk Uploads (Zwingende YouTube API Vorgabe)
 
 DEFAULT_DESCRIPTION = "Automatischer Upload via Script."
 DEFAULT_TAGS = "Upload, Video"
@@ -118,7 +121,7 @@ def load_configuration(log_changes=False):
     3. Zusatz-Konfigurationen (/etc/yt-upload/conf.d/*.conf)
     4. Umgebungsvariablen (ergänzend/überschreibend)
 
-    Berechnet einen MD5-Hash der Dateien für automatische Laufzeit-Aktualisierung.
+    Berechnet einen MD5-Hash der Dateien für automatische Laufzeit-Aktualisierung (Hot-Reload).
     """
     global IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR, LOG_FILE, CREDENTIALS_FILE
     global DEFAULT_DESCRIPTION, DEFAULT_TAGS, DEFAULT_CATEGORY, VIDEO_PRIVACY
@@ -153,9 +156,11 @@ def load_configuration(log_changes=False):
     config = configparser.ConfigParser()
     config_files = []
 
+    # Prüfe ob Haupt-Konfigurationsdatei existiert
     if os.path.isfile(CONF_PATH):
         config_files.append(CONF_PATH)
 
+    # Scanne conf.d Verzeichnis nach weiteren .conf Dateien
     if os.path.isdir(CONF_D_DIR):
         config_files.extend(sorted(glob.glob(os.path.join(CONF_D_DIR, "*.conf"))))
 
@@ -173,6 +178,7 @@ def load_configuration(log_changes=False):
         except OSError:
             pass
 
+    # Protokolliere Änderungen falls sich der Hash unterscheidet
     new_hash = hasher.hexdigest()
     if log_changes and CURRENT_CONFIG_HASH and new_hash != CURRENT_CONFIG_HASH:
         files_str = ", ".join(file_list_names) if file_list_names else "conf.d"
@@ -183,6 +189,7 @@ def load_configuration(log_changes=False):
     if config_files:
         config.read(config_files, encoding='utf-8')
 
+        # Sektion [paths] einlesen
         if 'paths' in config:
             in_dir = config.get('paths', 'in_dir', fallback=in_dir)
             work_dir = config.get('paths', 'work_dir', fallback=work_dir)
@@ -191,6 +198,7 @@ def load_configuration(log_changes=False):
             log_file = config.get('paths', 'log_file', fallback=log_file)
             credentials_file = config.get('paths', 'credentials_file', fallback=credentials_file)
 
+        # Sektion [settings] einlesen
         if 'settings' in config:
             default_description = config.get('settings', 'default_description', fallback=default_description)
             default_tags = config.get('settings', 'default_tags', fallback=default_tags)
@@ -206,6 +214,7 @@ def load_configuration(log_changes=False):
             enable_description_censor = config.getboolean('settings', 'enable_description_censor', fallback=enable_description_censor)
             dynamic_playlists = config.getboolean('settings', 'enable_dynamic_playlists', fallback=dynamic_playlists)
 
+        # Sektion [blacklist] einlesen
         if 'blacklist' in config:
             for key in config.options('blacklist'):
                 if key.strip() != '__name__':
@@ -213,7 +222,7 @@ def load_configuration(log_changes=False):
                     if val.lower() in ('true', '1', 'yes', 'on', ''):
                         combined_blacklist.add(key.strip().lower())
 
-    # --- Step 2: Umgebungsvariablen verarbeiten ---
+    # --- Step 2: Umgebungsvariablen verarbeiten (Höchste Priorität) ---
     IN_DIR = os.environ.get('IN_DIR', in_dir)
     WORK_DIR = os.environ.get('WORK_DIR', work_dir)
     DONE_DIR = os.environ.get('DONE_DIR', done_dir)
@@ -253,7 +262,7 @@ def load_configuration(log_changes=False):
     AUTO_THUMB_MAX_SEC = auto_thumb_max_sec
     ALLOW_OVERWRITE = allow_overwrite
 
-# Initiales Laden beim Scriptstart
+# Initiales Laden beim Scriptstart ausführen
 load_configuration(log_changes=False)
 
 
@@ -263,6 +272,7 @@ load_configuration(log_changes=False)
 def get_access_token(cred_file=None, client_secrets_file=None):
     """
     Generiert mittels Refresh-Token einen frischen OAuth2 Access Token bei Google.
+    Liest dazu die Client-Credentials aus der JSON-Datei ein.
     """
     target_cred = cred_file or CREDENTIALS_FILE
     if not os.path.exists(target_cred):
@@ -276,6 +286,7 @@ def get_access_token(cred_file=None, client_secrets_file=None):
         with open(client_secrets_file, "r", encoding="utf-8") as f:
             client_data = json.load(f)
 
+    # Extrahiere IDs aus verschiedenen möglichen JSON-Strukturen (installed/web/flat)
     client_id = client_data.get("client_id") or client_data.get("installed", {}).get("client_id") or client_data.get("web", {}).get("client_id")
     client_secret = client_data.get("client_secret") or client_data.get("installed", {}).get("client_secret") or client_data.get("web", {}).get("client_secret")
     refresh_token = data.get("refresh_token")
@@ -283,6 +294,7 @@ def get_access_token(cred_file=None, client_secrets_file=None):
     if not all([client_id, client_secret, refresh_token]):
         raise ValueError(f"OAuth-Credentials in {target_cred} unvollständig (client_id, client_secret oder refresh_token fehlt).")
 
+    # Sende Token-Refresh Request an Google OAuth 2.0 Endpoint
     token_url = "https://oauth2.googleapis.com/token"
     payload = {
         "client_id": client_id,
@@ -352,6 +364,7 @@ def cleanup_generated_thumbnail(thumb_path):
 
     temp_dir = os.path.abspath(tempfile.gettempdir())
     candidate = os.path.abspath(thumb_path)
+    # Nur Dateien löschen, die im Temp-Ordner liegen und das Präfix yt_thumb_ tragen
     if os.path.dirname(candidate) != temp_dir or not os.path.basename(candidate).startswith("yt_thumb_"):
         return
 
@@ -371,6 +384,7 @@ def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
         return False
 
     last_size = -1
+    # Prüfe iterativ, ob die Datei noch von einem externen Prozess geschrieben wird
     for check_num in range(max_checks):
         try:
             current_size = os.path.getsize(file_path)
@@ -394,6 +408,7 @@ def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
         logging.warning(f"Datei wird nach {max_checks * wait_interval}s noch geschrieben: {os.path.basename(file_path)}")
         return False
 
+    # Integritätsprüfung via ffprobe durchführen
     cmd_check = [
         "ffprobe",
         "-v", "error",
@@ -431,6 +446,7 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
     """
     load_configuration(log_changes=True)
 
+    # Prüfe zuerst, ob bereits verarbeitbare Dateien im Ordner liegen
     existing = find_existing_video(target_dir)
     if existing:
         logging.info(f"Bestehende Datei gefunden: {existing}")
@@ -439,6 +455,7 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
     logging.info(f"Warte via inotify auf neue Dateien in {target_dir}...")
     valid_exts = (".mp4", ".mkv", ".mov", ".m4v")
 
+    # Fallback-Schleife falls inotify nicht im System geladen ist
     if not HAS_INOTIFY or inotify_adapter is None:
         if not HAS_INOTIFY:
             logging.warning("inotify-Modul nicht verfügbar, nutze Polling-Fallback.")
@@ -449,6 +466,7 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
             if existing:
                 return existing
 
+    # Event-Loop für inotify
     while True:
         try:
             for event in inotify_adapter.event_gen(yield_nones=False, timeout_s=10):
@@ -462,6 +480,7 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
                     continue
 
                 (_, type_names, path, filename) = event
+                # Reagiere auf abgeschlossene Schreibvorgänge oder Verschiebungen
                 if any(t in type_names for t in ["IN_CLOSE_WRITE", "IN_MOVED_TO"]):
                     if filename.lower().endswith(valid_exts):
                         full_path = os.path.join(path, filename)
@@ -564,7 +583,7 @@ def sanitize_text(text):
     # Kurzform <3 in Herz umwandeln
     text = text.replace("<3", "♥")
 
-    # Spitzeichen für die API entfernen
+    # Spitzzeichen für die API entfernen
     text = text.replace("<", "").replace(">", "")
 
     # Steuerzeichen entfernen, Unicode-Symbole & Umlaute beibehalten
@@ -607,6 +626,7 @@ def extract_metadata_and_thumb(file_path):
         "duration": 0,
     }
 
+    # Metadaten aus dem Container via FFprobe extrahieren
     try:
         cmd_probe = [
             "ffprobe",
@@ -705,6 +725,7 @@ def extract_metadata_and_thumb(file_path):
     except Exception as e:
         logging.warning(f"Fehler bei der Thumbnail-Extraktion: {e}")
     finally:
+        # Aufräumen der temporären Attachment-Datei
         if os.path.exists(temp_attach):
             try:
                 os.remove(temp_attach)
@@ -771,6 +792,7 @@ def split_video_if_needed(work_path):
     base_name, ext = os.path.splitext(filename)
     segment_pattern = os.path.join(WORK_DIR, f"{base_name}_part%02d{ext}")
 
+    # Alte Segmente entfernen, falls noch vorhanden
     for item in os.listdir(WORK_DIR):
         if item.startswith(f"{base_name}_part") and item.endswith(ext):
             stale_segment = os.path.join(WORK_DIR, item)
@@ -779,6 +801,7 @@ def split_video_if_needed(work_path):
             except OSError as e:
                 raise RuntimeError(f"Altes Segment kann nicht gelöscht werden: {stale_segment}") from e
 
+    # Segmentierung verlustfrei mit Stream-Copy ausführen
     cmd_split = [
         "ffmpeg", "-y", "-i", work_path, "-c", "copy", "-map", "0",
         "-avoid_negative_ts", "make_zero", "-f", "segment",
@@ -792,6 +815,7 @@ def split_video_if_needed(work_path):
         logging.error(f"FFmpeg Splitting fehlgeschlagen: {e.stderr}")
         raise
 
+    # Generierte Segmente einsammeln
     created_segments = []
     part_idx = 0
     while True:
@@ -824,6 +848,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
         playlist_id = None
         next_page = None
 
+        # Durchsuche bestehende Playlists des Nutzers
         while True:
             list_url = f"https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50"
             if next_page:
@@ -845,6 +870,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                 logging.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {res.text}")
                 break
 
+        # Falls Playlist nicht existiert, erstelle sie neu
         if not playlist_id:
             create_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet,status"
             create_body = {
@@ -855,6 +881,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
             if create_res.status_code in (200, 201):
                 playlist_id = create_res.json().get("id")
 
+        # Video der Playlist zuweisen
         if playlist_id:
             item_url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet"
             item_body = {
@@ -935,11 +962,13 @@ def upload_single_video(
 
     session = requests.Session()
 
+    # Ausrichtung der Chunksize an die von YouTube vorgeschriebene 256-KiB-Grenze
     if chunksize % CHUNK_UNIT_BYTES != 0:
         adjusted_chunksize = max(CHUNK_UNIT_BYTES, (chunksize // CHUNK_UNIT_BYTES) * CHUNK_UNIT_BYTES)
         logging.info(f"Chunksize angepasst auf Vielfaches von 256 KiB: {chunksize} -> {adjusted_chunksize} Bytes")
         chunksize = adjusted_chunksize
 
+    # Säuberung und Kürzung der Tags
     clean_tags = []
     if isinstance(tags, list):
         tags_list = tags
@@ -964,6 +993,7 @@ def upload_single_video(
     if not cat_id:
         cat_id = "22"
 
+    # Erstelle API Metadaten Structure
     snippet = {
         "title": title,
         "description": desc or "",
@@ -1006,6 +1036,7 @@ def upload_single_video(
     if "recordingDetails" in metadata_body:
         parts += ",recordingDetails"
 
+    # 1. Resumable Upload Session bei Google initialisieren
     init_url = f"https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part={parts}"
     init_headers = {
         "Authorization": f"Bearer {access_token}",
@@ -1030,6 +1061,7 @@ def upload_single_video(
     video_id = None
     uploaded_bytes = 0
 
+    # 2. Datei in Chunks unterteilt übertragen
     with open(file_path, "rb") as f:
         while uploaded_bytes < file_size:
             chunk_start = uploaded_bytes
@@ -1049,6 +1081,7 @@ def upload_single_video(
                 try:
                     put_res = session.put(upload_url, headers=chunk_headers, data=chunk, timeout=120)
 
+                    # Status 200/201: Upload vollständig abgeschlossen
                     if put_res.status_code in (200, 201):
                         resp_data = put_res.json()
                         video_id = resp_data.get("id")
@@ -1057,10 +1090,14 @@ def upload_single_video(
                         logging.info(f"Upload ERFOLGREICH abgeschlossen! Video-ID: {video_id}")
                         break
 
+                    # Status 308: Incomplete, Chunk erfolgreich empfangen (mit robuster Offset-Auswertung)
                     elif put_res.status_code == 308:
                         range_hdr = put_res.headers.get("Range")
                         if range_hdr and "-" in range_hdr:
-                            uploaded_bytes = int(range_hdr.split("-")[1]) + 1
+                            try:
+                                uploaded_bytes = int(range_hdr.split("-")[1]) + 1
+                            except (ValueError, IndexError):
+                                uploaded_bytes += chunk_len
                         else:
                             uploaded_bytes += chunk_len
 
@@ -1073,6 +1110,7 @@ def upload_single_video(
                         chunk_success = True
                         break
 
+                    # Token abgelaufen: Access Token erneuern und erneut versuchen
                     elif put_res.status_code in (401, 403):
                         access_token = get_access_token(cred_file, client_secrets_file)
                         chunk_headers["Authorization"] = f"Bearer {access_token}"
@@ -1085,6 +1123,7 @@ def upload_single_video(
             if not chunk_success:
                 raise RuntimeError("Max Retries beim Upload überschritten.")
 
+    # 3. Post-Upload-Schritte: Thumbnail hochladen und Playlist-Zuweisung
     try:
         if video_id:
             if thumb_path and os.path.exists(thumb_path):
@@ -1137,6 +1176,7 @@ def process_single_file(file_path, args=None):
     filename = os.path.basename(file_path)
     logging.info(f"--- VERARBEITE DATEI: {filename} ---")
 
+    # Vorab-Prüfung auf Integrität der Quelldatei
     if not is_file_ready_and_valid(file_path):
         logging.error(f"Datei unvollständig oder ungültig: {filename}. Verschiebe nach CORRUPT...")
         target_corrupt = resolve_target_path(CORRUPT_DIR, filename)
@@ -1149,6 +1189,7 @@ def process_single_file(file_path, args=None):
 
     meta = extract_metadata_and_thumb(work_path)
 
+    # Zusammenführen von Argumenten und Container-Metadaten
     raw_title = (args.title if args and hasattr(args, 'title') and args.title else meta["title"]) or os.path.splitext(filename)[0]
     raw_desc = (args.description if args and hasattr(args, 'description') and args.description else meta["description"]) or DEFAULT_DESCRIPTION
 
@@ -1157,6 +1198,7 @@ def process_single_file(file_path, args=None):
     if meta.get("purl") and meta["purl"] not in raw_desc:
         raw_desc = f"{raw_desc}\n\nQuelle: {meta['purl']}"
 
+    # Zensur-Filter anwenden
     title_base = censor_text(raw_title)
     desc_base = censor_text(raw_desc)
 
@@ -1184,8 +1226,10 @@ def process_single_file(file_path, args=None):
     chunksize = args.chunksize if args and hasattr(args, 'chunksize') else 268435456
     open_link = args.open_link if args and hasattr(args, 'open_link') else False
 
+    # Splitting-Prüfung ausführen
     segments = split_video_if_needed(work_path)
 
+    # Segmente nacheinander hochladen
     for idx, seg in enumerate(segments):
         part_title = title_base
         if len(segments) > 1:
@@ -1220,6 +1264,7 @@ def process_single_file(file_path, args=None):
             cleanup_work_files(segments, is_error=True)
             return
 
+    # Bei Erfolg ins DONE-Verzeichnis verschieben
     target_done = resolve_target_path(DONE_DIR, filename)
     logging.info(f"Verarbeitung erfolgreich. Verschiebe Original nach DONE: {target_done}")
     shutil.move(work_path, target_done)
@@ -1272,6 +1317,7 @@ def main():
     load_configuration(log_changes=False)
     ensure_directories()
 
+    # Log-Handler initialisieren
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -1313,6 +1359,7 @@ def main():
             while True:
                 load_configuration(log_changes=True)
 
+                # Bei Pfadänderung inotify Tree neu initialisieren
                 if HAS_INOTIFY and current_watched_dir != IN_DIR:
                     try:
                         logging.info(f"Initialisiere InotifyTree auf: {IN_DIR}")
