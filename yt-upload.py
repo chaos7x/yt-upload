@@ -27,7 +27,7 @@ SYSTEM-VORAUSSETZUNGEN:
 """
 
 __title__ = "YouTube Video Uploader & CLI-Uploader"
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 
 import argparse
 import configparser
@@ -39,6 +39,13 @@ import os
 import re
 import shutil
 import subprocess
+
+try:
+    import fcntl
+    HAS_FCNTL = True
+except ImportError:
+    # fcntl ist nur auf Unix verfügbar; auf anderen Plattformen läuft das Skript ohne Lockfile-Schutz weiter.
+    HAS_FCNTL = False
 import sys
 import tempfile
 import time
@@ -51,10 +58,8 @@ from datetime import datetime, timezone
 # Debug-Modus über Umgebungsvariable 'DEBUG' setzen
 # Prüft, ob 'DEBUG' in den Umgebungsvariablen aktiv gesetzt ist (true/yes/1).
 # ------------------------------------------------------------------------------
-if os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1'):
-    os.environ['DEBUG'] = '1'
-else:
-    os.environ['DEBUG'] = '0'
+DEBUG_MODE = os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1')
+os.environ['DEBUG'] = '1' if DEBUG_MODE else '0'
 
 # ------------------------------------------------------------------------------
 # Inotify Import-Prüfung (Echtzeit-Dateisystemüberwachung unter Linux)
@@ -80,6 +85,9 @@ IN_DIR = os.environ.get('IN_DIR', "/videos/in" if os.path.exists("/videos") else
 WORK_DIR = os.environ.get('WORK_DIR', "/videos/work" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "work"))
 DONE_DIR = os.environ.get('DONE_DIR', "/videos/done" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "done"))
 CORRUPT_DIR = os.environ.get('CORRUPT_DIR', "/videos/corrupt" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "corrupt"))
+# Für Dateien, bei denen bereits mind. ein Segment erfolgreich hochgeladen wurde, bevor ein Fehler auftrat.
+# Getrennt von CORRUPT_DIR, damit kein versehentlicher Doppel-Upload bereits hochgeladener Segmente droht.
+RETRY_DIR = os.environ.get('RETRY_DIR', "/videos/retry" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "retry"))
 
 LOG_FILE = os.environ.get('LOG_FILE', "/log/upload.log" if os.path.exists("/log") else os.path.join(BASE_DIR, "upload.log"))
 CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', "/app/oauth/youtube-upload-credentials.json" if os.path.exists("/app/oauth") else os.path.join(BASE_DIR, "youtube-upload-credentials.json"))
@@ -123,7 +131,7 @@ def load_configuration(log_changes=False):
 
     Berechnet einen MD5-Hash der Dateien für automatische Laufzeit-Aktualisierung (Hot-Reload).
     """
-    global IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR, LOG_FILE, CREDENTIALS_FILE
+    global IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR, RETRY_DIR, LOG_FILE, CREDENTIALS_FILE
     global DEFAULT_DESCRIPTION, DEFAULT_TAGS, DEFAULT_CATEGORY, VIDEO_PRIVACY
     global VIDEO_LANGUAGE, ALLOW_EMBEDDING, PLAYLIST_NAME, AUTO_GENERATE_THUMBNAIL
     global AUTO_THUMB_MIN_SEC, AUTO_THUMB_MAX_SEC, ALLOW_OVERWRITE, DYNAMIC_PLAYLISTS
@@ -134,6 +142,7 @@ def load_configuration(log_changes=False):
     work_dir = WORK_DIR
     done_dir = DONE_DIR
     corrupt_dir = CORRUPT_DIR
+    retry_dir = RETRY_DIR
     log_file = LOG_FILE
     credentials_file = CREDENTIALS_FILE
 
@@ -195,6 +204,7 @@ def load_configuration(log_changes=False):
             work_dir = config.get('paths', 'work_dir', fallback=work_dir)
             done_dir = config.get('paths', 'done_dir', fallback=done_dir)
             corrupt_dir = config.get('paths', 'corrupt_dir', fallback=corrupt_dir)
+            retry_dir = config.get('paths', 'retry_dir', fallback=retry_dir)
             log_file = config.get('paths', 'log_file', fallback=log_file)
             credentials_file = config.get('paths', 'credentials_file', fallback=credentials_file)
 
@@ -227,6 +237,7 @@ def load_configuration(log_changes=False):
     WORK_DIR = os.environ.get('WORK_DIR', work_dir)
     DONE_DIR = os.environ.get('DONE_DIR', done_dir)
     CORRUPT_DIR = os.environ.get('CORRUPT_DIR', corrupt_dir)
+    RETRY_DIR = os.environ.get('RETRY_DIR', retry_dir)
     LOG_FILE = os.environ.get('LOG_FILE', log_file)
     CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', credentials_file)
 
@@ -278,6 +289,19 @@ def get_access_token(cred_file=None, client_secrets_file=None):
     if not os.path.exists(target_cred):
         raise FileNotFoundError(f"Credentials-Datei nicht gefunden: {target_cred}")
 
+    # Sicherheits-Check: Datei enthält Client-Secret & Refresh-Token im Klartext,
+    # daher sollte sie nicht für Gruppe/Andere lesbar sein.
+    try:
+        current_mode = os.stat(target_cred).st_mode
+        if current_mode & 0o077:
+            try:
+                os.chmod(target_cred, 0o600)
+                logging.warning(f"Credentials-Datei {target_cred} war zu offen berechtigt, auf 600 korrigiert.")
+            except OSError as chmod_err:
+                logging.warning(f"Credentials-Datei {target_cred} ist zu offen berechtigt und konnte nicht korrigiert werden: {chmod_err}")
+    except OSError:
+        pass
+
     with open(target_cred, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -315,7 +339,7 @@ def get_access_token(cred_file=None, client_secrets_file=None):
 # ==============================================================================
 def ensure_directories():
     """Stellt sicher, dass alle notwendigen Zielverzeichnisse auf dem Dateisystem existieren."""
-    for d in [IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR]:
+    for d in [IN_DIR, WORK_DIR, DONE_DIR, CORRUPT_DIR, RETRY_DIR]:
         try:
             os.makedirs(d, exist_ok=True)
         except (PermissionError, OSError) as e:
@@ -323,7 +347,11 @@ def ensure_directories():
 
 
 def unique_path(directory, filename):
-    """Generiert einen eindeutigen Dateipfad durch Anhängen von Zählern, falls die Datei existiert."""
+    """
+    Generiert einen eindeutigen Dateipfad durch Anhängen von Zählern, falls die Datei existiert.
+    Hinweis: Prüfung und späteres Verschieben sind nicht atomar (TOCTOU); das ist unkritisch,
+    solange acquire_instance_lock() parallele Instanzen desselben Skripts verhindert.
+    """
     candidate = os.path.join(directory, filename)
     if not os.path.lexists(candidate):
         return candidate
@@ -343,6 +371,47 @@ def resolve_target_path(directory, filename):
     if ALLOW_OVERWRITE:
         return candidate
     return unique_path(directory, filename)
+
+
+def _progress_file_path(work_path):
+    """Pfad der Sidecar-JSON-Datei, die bereits erfolgreich hochgeladene Segmente eines Jobs protokolliert."""
+    directory = os.path.dirname(work_path)
+    filename = os.path.basename(work_path)
+    return os.path.join(directory, f".{filename}.progress.json")
+
+
+def load_segment_progress(work_path):
+    """Lädt {segment_dateiname: video_id} bereits erfolgreich hochgeladener Segmente, falls vorhanden."""
+    progress_path = _progress_file_path(work_path)
+    if not os.path.isfile(progress_path):
+        return {}
+    try:
+        with open(progress_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError) as e:
+        logging.warning(f"Konnte Progress-Datei {progress_path} nicht lesen, starte ohne Fortschritt: {e}")
+        return {}
+
+
+def save_segment_progress(work_path, progress):
+    """Persistiert den aktuellen Fortschritt sofort nach jedem erfolgreichen Segment-Upload."""
+    progress_path = _progress_file_path(work_path)
+    try:
+        with open(progress_path, "w", encoding="utf-8") as f:
+            json.dump(progress, f)
+    except OSError as e:
+        logging.warning(f"Konnte Progress-Datei {progress_path} nicht schreiben: {e}")
+
+
+def clear_segment_progress(work_path):
+    """Entfernt die Progress-Datei nach vollständigem Erfolg (oder wenn kein Segment fertig wurde)."""
+    progress_path = _progress_file_path(work_path)
+    try:
+        if os.path.isfile(progress_path):
+            os.unlink(progress_path)
+    except OSError as e:
+        logging.warning(f"Konnte Progress-Datei {progress_path} nicht löschen: {e}")
 
 
 def cleanup_work_files(work_paths, is_error=False):
@@ -832,6 +901,11 @@ def split_video_if_needed(work_path):
     return created_segments
 
 
+class PermanentUploadError(RuntimeError):
+    """Wird bei dauerhaften (nicht behebbaren) API-Fehlern ausgelöst, um sinnloses Retrying zu vermeiden."""
+    pass
+
+
 # ==============================================================================
 # REST API UPLOADER & PLAYLIST MANAGEMENT
 # ==============================================================================
@@ -989,7 +1063,7 @@ def upload_single_video(
             final_tags.append(t)
             current_length += len(t) + 1
 
-    cat_id = get_valid_category_id(category) if 'get_valid_category_id' in globals() else category
+    cat_id = get_valid_category_id(category)
     if not cat_id:
         cat_id = "22"
 
@@ -1030,7 +1104,7 @@ def upload_single_video(
         metadata_body["recordingDetails"] = metadata_body.get("recordingDetails", {})
         metadata_body["recordingDetails"]["location"] = parsed_loc
 
-    logging.info(f"PAYLOAD DEBUG: {json.dumps(metadata_body, ensure_ascii=False)}")
+    logging.debug(f"PAYLOAD DEBUG: {json.dumps(metadata_body, ensure_ascii=False)}")
 
     parts = "snippet,status"
     if "recordingDetails" in metadata_body:
@@ -1047,8 +1121,36 @@ def upload_single_video(
 
     logging.info("Initialisiere Resumable Upload Session...")
 
-    init_res = session.post(init_url, headers=init_headers, json=metadata_body, timeout=60)
-    if init_res.status_code != 200:
+    init_res = None
+    init_max_retries = 3
+    for init_attempt in range(1, init_max_retries + 1):
+        try:
+            init_res = session.post(init_url, headers=init_headers, json=metadata_body, timeout=60)
+        except requests.exceptions.RequestException as e:
+            logging.warning(f"Netzwerkfehler bei Session-Init (Versuch {init_attempt}/{init_max_retries}): {e}")
+            if init_attempt < init_max_retries:
+                time.sleep(2 ** init_attempt)
+                continue
+            raise RuntimeError(f"Session-Init nach {init_max_retries} Versuchen fehlgeschlagen: {e}") from e
+
+        if init_res.status_code == 200:
+            break
+
+        # Token abgelaufen: einmalig erneuern und erneut versuchen
+        if init_res.status_code in (401, 403) and init_attempt < init_max_retries:
+            access_token = get_access_token(cred_file, client_secrets_file)
+            init_headers["Authorization"] = f"Bearer {access_token}"
+            continue
+
+        # Transiente Server-Fehler: mit Backoff erneut versuchen
+        if init_res.status_code in (500, 502, 503, 504) and init_attempt < init_max_retries:
+            logging.warning(
+                f"YouTube API meldet {init_res.status_code} bei Session-Init. "
+                f"Retry {init_attempt}/{init_max_retries} in {2 ** init_attempt}s..."
+            )
+            time.sleep(2 ** init_attempt)
+            continue
+
         raise RuntimeError(f"Session-Init fehlgeschlagen ({init_res.status_code}): {init_res.text}")
 
     upload_url = init_res.headers.get("Location")
@@ -1115,6 +1217,23 @@ def upload_single_video(
                         access_token = get_access_token(cred_file, client_secrets_file)
                         chunk_headers["Authorization"] = f"Bearer {access_token}"
                         raise RuntimeError("Token erneuert, versuche Chunk erneut...")
+
+                    # Alle übrigen Status-Codes: immer loggen, damit Fehler nicht stillschweigend verschwinden
+                    else:
+                        logging.error(
+                            f"Unerwarteter Status {put_res.status_code} beim Chunk-Upload "
+                            f"(Versuch {attempt}/{max_retries}): {put_res.text[:500]}"
+                        )
+                        # Dauerhafte Client-Fehler (z.B. 400 ungültige Metadaten, 404 Session weg)
+                        # lassen sich durch Wiederholen nicht beheben -> sofort abbrechen statt 5x zu retryen
+                        if 400 <= put_res.status_code < 500 and put_res.status_code not in (401, 403, 408, 429):
+                            raise PermanentUploadError(
+                                f"Nicht behebbarer Fehler ({put_res.status_code}): {put_res.text[:500]}"
+                            )
+                        raise RuntimeError(f"Transienter Fehler ({put_res.status_code}), versuche erneut...")
+
+                except PermanentUploadError:
+                    raise  # nicht abfangen/retryen - direkt an den Aufrufer durchreichen
 
                 except Exception as e:
                     logging.warning(f"Fehler bei Chunk-Upload (Versuch {attempt}/{max_retries}): {e}")
@@ -1229,14 +1348,25 @@ def process_single_file(file_path, args=None):
     # Splitting-Prüfung ausführen
     segments = split_video_if_needed(work_path)
 
+    # Fortschritt aus einem evtl. vorherigen fehlgeschlagenen Lauf laden (Segment-Dateiname -> Video-ID)
+    progress = load_segment_progress(work_path)
+    if progress:
+        logging.info(f"Bestehender Fortschritt gefunden: {len(progress)} Segment(e) bereits hochgeladen, werden übersprungen.")
+
     # Segmente nacheinander hochladen
     for idx, seg in enumerate(segments):
+        seg_key = os.path.basename(seg)
+
+        if seg_key in progress:
+            logging.info(f"Segment {seg_key} bereits hochgeladen (Video-ID {progress[seg_key]}), überspringe.")
+            continue
+
         part_title = title_base
         if len(segments) > 1:
             part_title = f"{title_base} (Teil {idx + 1}/{len(segments)})"
 
         try:
-            upload_single_video(
+            video_id = upload_single_video(
                 file_path=seg,
                 title=part_title,
                 desc=desc_base,
@@ -1257,11 +1387,30 @@ def process_single_file(file_path, args=None):
                 chunksize=chunksize,
                 open_link=open_link
             )
+            # Fortschritt sofort persistieren, damit bei einem späteren Fehler nichts verloren geht
+            progress[seg_key] = video_id
+            save_segment_progress(work_path, progress)
         except Exception as e:
             logging.error(f"Upload-Fehler bei Segment {seg}: {e}")
-            target_corrupt = resolve_target_path(CORRUPT_DIR, filename)
-            shutil.move(work_path, target_corrupt)
-            cleanup_work_files(segments, is_error=True)
+
+            if progress:
+                # Mind. ein Segment wurde bereits erfolgreich hochgeladen: NICHT nach CORRUPT verschieben,
+                # sonst gehen Original + Fortschritt-Zuordnung verloren und bereits hochgeladene Segmente
+                # würden bei einem erneuten Lauf ein zweites Mal hochgeladen.
+                target_retry = resolve_target_path(RETRY_DIR, filename)
+                logging.warning(
+                    f"{len(progress)} von {len(segments)} Segment(en) bereits erfolgreich hochgeladen. "
+                    f"Verschiebe Original nach RETRY statt CORRUPT, Fortschritt bleibt erhalten: {target_retry}"
+                )
+                shutil.move(work_path, target_retry)
+                # Nur die noch nicht hochgeladenen Segmente lokal aufräumen; bereits hochgeladene
+                # Segment-Dateien können ebenfalls entfernt werden, da das Video schon bei YouTube liegt.
+                cleanup_work_files(segments, is_error=True)
+            else:
+                target_corrupt = resolve_target_path(CORRUPT_DIR, filename)
+                shutil.move(work_path, target_corrupt)
+                cleanup_work_files(segments, is_error=True)
+                clear_segment_progress(work_path)
             return
 
     # Bei Erfolg ins DONE-Verzeichnis verschieben
@@ -1269,6 +1418,7 @@ def process_single_file(file_path, args=None):
     logging.info(f"Verarbeitung erfolgreich. Verschiebe Original nach DONE: {target_done}")
     shutil.move(work_path, target_done)
     cleanup_work_files(segments)
+    clear_segment_progress(work_path)
 
 
 # ==============================================================================
@@ -1312,6 +1462,36 @@ def parse_arguments():
     return parser.parse_args()
 
 
+_lock_file_handle = None
+
+
+def acquire_instance_lock():
+    """
+    Verhindert per exklusivem Filesystem-Lock, dass zwei Instanzen des Skripts
+    (z.B. Daemon + Auto-Modus, oder zwei Daemons) gleichzeitig dieselben
+    IN_DIR/WORK_DIR-Verzeichnisse bearbeiten und sich Dateien gegenseitig wegschnappen.
+    Gibt True zurück, wenn der Lock erfolgreich erworben wurde.
+    """
+    global _lock_file_handle
+
+    if not HAS_FCNTL:
+        logging.warning("fcntl nicht verfügbar (kein Unix-System) - Lockfile-Schutz übersprungen.")
+        return True
+
+    lock_path = os.path.join(tempfile.gettempdir(), "yt-upload.lock")
+    try:
+        _lock_file_handle = open(lock_path, "w")
+        fcntl.flock(_lock_file_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_file_handle.write(str(os.getpid()))
+        _lock_file_handle.flush()
+        return True
+    except (OSError, BlockingIOError):
+        logging.error(
+            f"Es läuft bereits eine andere Instanz von {__title__} (Lock: {lock_path}). Breche ab."
+        )
+        return False
+
+
 def main():
     """Hauptablaufsteuerung abhängig von den übergebenen Parametern."""
     load_configuration(log_changes=False)
@@ -1319,7 +1499,7 @@ def main():
 
     # Log-Handler initialisieren
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG if DEBUG_MODE else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
@@ -1330,6 +1510,9 @@ def main():
     args = parse_arguments()
 
     logging.info(f"=== {__title__} v{__version__} gestartet ===")
+
+    if not acquire_instance_lock():
+        sys.exit(1)
 
     # Modus 1: Manueller Upload einer angegebenen Datei
     if args.file:
