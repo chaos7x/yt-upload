@@ -15,7 +15,7 @@
 # ==============================================================================
 
 """
-Automatischer YouTube Video Uploader & CLI-Uploader v2.0.3 (YouTube Data API v3)
+Automatischer YouTube Video Uploader & CLI-Uploader (YouTube Data API v3)
 Bietet drei Betriebsmodi:
 1. Manuell (CLI): Upload einzelner Dateien wie mit dem klassischen youtube-upload.
 2. Auto-Pipeline (-a --auto): Einmalige Batch-Verarbeitung eines Zielverzeichnisses mit FFmpeg-Splitting & Metadatenvererbung.
@@ -27,7 +27,7 @@ SYSTEM-VORAUSSETZUNGEN:
 """
 
 __title__ = "YouTube Video Uploader & CLI-Uploader"
-__version__ = "1.0.5"
+__version__ = "1.1.0"
 
 import argparse
 import configparser
@@ -35,6 +35,7 @@ import glob
 import hashlib
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import re
 import shutil
@@ -89,7 +90,55 @@ CORRUPT_DIR = os.environ.get('CORRUPT_DIR', "/videos/corrupt" if os.path.exists(
 # Getrennt von CORRUPT_DIR, damit kein versehentlicher Doppel-Upload bereits hochgeladener Segmente droht.
 RETRY_DIR = os.environ.get('RETRY_DIR', "/videos/retry" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "retry"))
 
-LOG_FILE = os.environ.get('LOG_FILE', "/log/upload.log" if os.path.exists("/log") else os.path.join(BASE_DIR, "upload.log"))
+def is_syslog_daemon_running():
+    """
+    Prüft, ob ein klassischer Syslog-Daemon (rsyslog, syslog-ng, syslogd) aktiv läuft,
+    indem /proc nach dem Prozessnamen durchsucht wird. Rein stdlib, kein subprocess/psutil.
+    Auf Nicht-Linux-Systemen (kein /proc) liefert die Funktion konservativ False.
+    """
+    if not os.path.isdir("/proc"):
+        return False
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/comm", "r") as f:
+                name = f.read().strip()
+            if name in ("rsyslogd", "syslog-ng", "syslogd"):
+                return True
+        except (OSError, PermissionError):
+            continue
+    return False
+
+
+def _default_log_file():
+    """
+    Ermittelt den Standard-Logpfad:
+    1. /log/upload.log, falls /log existiert (übliche Docker-Volume-Konvention)
+    2. /var/log/yt-upload/yt-upload.log, falls beschreibbar (FHS-Standard für Bare-Metal-Daemons)
+    3. BASE_DIR/upload.log als letzter Fallback (z.B. lokales Testen ohne Root-Rechte)
+    """
+    if os.path.exists("/log"):
+        return "/log/upload.log"
+
+    var_log_dir = "/var/log/yt-upload"
+    try:
+        os.makedirs(var_log_dir, exist_ok=True)
+        if os.access(var_log_dir, os.W_OK):
+            return os.path.join(var_log_dir, "yt-upload.log")
+    except OSError:
+        pass
+
+    return os.path.join(BASE_DIR, "upload.log")
+
+
+_env_log_file_override = os.environ.get('LOG_FILE', '').strip()
+LOG_FILE = _env_log_file_override or _default_log_file()
+# Merkt sich, ob LOG_FILE explizit (ENV oder später Config) gesetzt wurde,
+# im Unterschied zur automatischen Pfad-Ermittlung via _default_log_file().
+# Wird von main() genutzt, um den Datei-Handler auch ohne Syslog-Daemon zu
+# aktivieren, wenn der Pfad ausdrücklich konfiguriert wurde.
+LOG_FILE_EXPLICIT = bool(_env_log_file_override)
 CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', "/app/oauth/youtube-upload-credentials.json" if os.path.exists("/app/oauth") else os.path.join(BASE_DIR, "youtube-upload-credentials.json"))
 
 # YouTube Limitierungen & Netzwerk-Chunk-Spezifikationen
@@ -137,6 +186,7 @@ def load_configuration(log_changes=False):
     global AUTO_THUMB_MIN_SEC, AUTO_THUMB_MAX_SEC, ALLOW_OVERWRITE, DYNAMIC_PLAYLISTS
     global CURRENT_CONFIG_HASH
     global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST
+    global LOG_FILE_EXPLICIT
 
     in_dir = IN_DIR
     work_dir = WORK_DIR
@@ -144,6 +194,7 @@ def load_configuration(log_changes=False):
     corrupt_dir = CORRUPT_DIR
     retry_dir = RETRY_DIR
     log_file = LOG_FILE
+    log_file_explicit = LOG_FILE_EXPLICIT
     credentials_file = CREDENTIALS_FILE
 
     default_description = DEFAULT_DESCRIPTION
@@ -205,6 +256,8 @@ def load_configuration(log_changes=False):
             done_dir = config.get('paths', 'done_dir', fallback=done_dir)
             corrupt_dir = config.get('paths', 'corrupt_dir', fallback=corrupt_dir)
             retry_dir = config.get('paths', 'retry_dir', fallback=retry_dir)
+            if config.has_option('paths', 'log_file'):
+                log_file_explicit = True
             log_file = config.get('paths', 'log_file', fallback=log_file)
             credentials_file = config.get('paths', 'credentials_file', fallback=credentials_file)
 
@@ -238,7 +291,10 @@ def load_configuration(log_changes=False):
     DONE_DIR = os.environ.get('DONE_DIR', done_dir)
     CORRUPT_DIR = os.environ.get('CORRUPT_DIR', corrupt_dir)
     RETRY_DIR = os.environ.get('RETRY_DIR', retry_dir)
+    if 'LOG_FILE' in os.environ:
+        log_file_explicit = True
     LOG_FILE = os.environ.get('LOG_FILE', log_file)
+    LOG_FILE_EXPLICIT = log_file_explicit
     CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', credentials_file)
 
     VIDEO_PRIVACY = os.environ.get('VIDEO_PRIVACY', video_privacy)
@@ -675,7 +731,10 @@ def parse_location(location_str):
             loc["altitude"] = float(parts["altitude"])
         return loc
     except Exception as e:
-        logging.warning(f"Konnte Location-String nicht parsen ('{location_str}'): {e}")
+        # Rohe Koordinaten sind Standortdaten und dürfen laut Logging-Policy nur
+        # auf DEBUG-Level erscheinen, nie auf WARNING/INFO oder höher.
+        logging.warning(f"Konnte Location-String nicht parsen: {e}")
+        logging.debug(f"Fehlerhafter Location-String war: '{location_str}'")
         return None
 
 
@@ -909,18 +968,32 @@ class PermanentUploadError(RuntimeError):
 # ==============================================================================
 # REST API UPLOADER & PLAYLIST MANAGEMENT
 # ==============================================================================
-def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_PRIVACY):
+def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_PRIVACY,
+                           cred_file=None, client_secrets_file=None):
     """
     Sucht eine Playlist anhand ihres Namens. Erstellt diese, falls nicht vorhanden,
     und fügt das hochgeladene Video hinzu (inkl. Retry-Logik bei temporären API-Fehlern).
+    Erneuert den Access-Token automatisch bei 401/403 (z.B. nach sehr langen Uploads).
     """
     if not playlist_name or not video_id:
         return False
 
     headers = {"Authorization": f"Bearer {access_token}"}
+
+    def _refresh_token_if_possible():
+        """Versucht, den Token zu erneuern; gibt True zurück, wenn headers aktualisiert wurden."""
+        try:
+            new_token = get_access_token(cred_file, client_secrets_file)
+            headers["Authorization"] = f"Bearer {new_token}"
+            return True
+        except Exception as e:
+            logging.warning(f"Token-Refresh für Playlist-Zuweisung fehlgeschlagen: {e}")
+            return False
+
     try:
         playlist_id = None
         next_page = None
+        auth_retry_used = False
 
         # Durchsuche bestehende Playlists des Nutzers
         while True:
@@ -929,6 +1002,15 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                 list_url += f"&pageToken={next_page}"
 
             res = requests.get(list_url, headers=headers, timeout=30)
+
+            if res.status_code in (401, 403) and not auth_retry_used:
+                logging.warning("Playlist-Abruf: Token abgelaufen, erneuere und versuche erneut...")
+                auth_retry_used = True
+                if _refresh_token_if_possible():
+                    continue
+                logging.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {res.text}")
+                break
+
             if res.status_code == 200:
                 data = res.json()
                 for item in data.get("items", []):
@@ -952,8 +1034,15 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                 "status": {"privacyStatus": privacy}
             }
             create_res = requests.post(create_url, headers=headers, json=create_body, timeout=30)
+            if create_res.status_code in (401, 403) and not auth_retry_used:
+                logging.warning("Playlist-Erstellung: Token abgelaufen, erneuere und versuche erneut...")
+                auth_retry_used = True
+                if _refresh_token_if_possible():
+                    create_res = requests.post(create_url, headers=headers, json=create_body, timeout=30)
             if create_res.status_code in (200, 201):
                 playlist_id = create_res.json().get("id")
+            elif create_res.status_code not in (200, 201):
+                logging.warning(f"Konnte Playlist nicht erstellen ({create_res.status_code}): {create_res.text}")
 
         # Video der Playlist zuweisen
         if playlist_id:
@@ -970,6 +1059,12 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
 
             for attempt in range(1, max_retries + 1):
                 item_res = requests.post(item_url, headers=headers, json=item_body, timeout=30)
+
+                if item_res.status_code in (401, 403) and not auth_retry_used:
+                    logging.warning("Playlist-Zuweisung: Token abgelaufen, erneuere und versuche erneut...")
+                    auth_retry_used = True
+                    if _refresh_token_if_possible():
+                        continue
 
                 if item_res.status_code in (200, 201):
                     logging.info(f"Video {video_id} erfolgreich zur Playlist '{playlist_name}' hinzugefügt.")
@@ -1243,6 +1338,13 @@ def upload_single_video(
                 raise RuntimeError("Max Retries beim Upload überschritten.")
 
     # 3. Post-Upload-Schritte: Thumbnail hochladen und Playlist-Zuweisung
+    # Bei sehr großen Dateien kann der Chunk-Upload allein schon die Token-Lebensdauer
+    # (~1h) überschreiten. Token hier proaktiv erneuern statt erst bei 401 zu reagieren.
+    try:
+        access_token = get_access_token(cred_file, client_secrets_file)
+    except Exception as refresh_err:
+        logging.warning(f"Token-Refresh vor Post-Upload-Schritten fehlgeschlagen, verwende bestehenden Token: {refresh_err}")
+
     try:
         if video_id:
             if thumb_path and os.path.exists(thumb_path):
@@ -1250,24 +1352,36 @@ def upload_single_video(
                     logging.info(f"Lade benutzerdefiniertes Thumbnail hoch: {thumb_path}")
                     thumb_url = f"https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={video_id}"
                     with open(thumb_path, "rb") as tf:
+                        thumb_bytes = tf.read()
+
+                    for thumb_attempt in (1, 2):
                         t_res = session.post(
                             thumb_url,
                             headers={
                                 "Authorization": f"Bearer {access_token}",
                                 "Content-Type": "image/jpeg"
                             },
-                            data=tf,
+                            data=thumb_bytes,
                             timeout=60
                         )
-                    if t_res.status_code in (200, 201):
-                        logging.info("Thumbnail erfolgreich gesetzt.")
-                    else:
-                        logging.warning(f"Thumbnail-Upload fehlgeschlagen ({t_res.status_code}): {t_res.text}")
+                        if t_res.status_code in (200, 201):
+                            logging.info("Thumbnail erfolgreich gesetzt.")
+                            break
+                        elif t_res.status_code in (401, 403) and thumb_attempt == 1:
+                            logging.warning("Thumbnail-Upload: Token abgelaufen, erneuere und versuche erneut...")
+                            access_token = get_access_token(cred_file, client_secrets_file)
+                            continue
+                        else:
+                            logging.warning(f"Thumbnail-Upload fehlgeschlagen ({t_res.status_code}): {t_res.text}")
+                            break
                 except Exception as te:
                     logging.warning(f"Fehler beim Thumbnail-Setzen: {te}")
 
             if playlist_name:
-                add_video_to_playlist(video_id, playlist_name, access_token, privacy)
+                add_video_to_playlist(
+                    video_id, playlist_name, access_token, privacy,
+                    cred_file=cred_file, client_secrets_file=client_secrets_file
+                )
 
             if open_link:
                 v_url = f"https://www.youtube.com/watch?v={video_id}"
@@ -1498,14 +1612,57 @@ def main():
     ensure_directories()
 
     # Log-Handler initialisieren
+    # stdout-Handler: immer aktiv, wird von journald/docker logs erfasst.
+    # RotatingFileHandler: zusätzlich, ausgelöst durch (a) explizite LOG_FILE-
+    # Konfiguration (Config oder ENV), (b) ein vorhandenes /log-Verzeichnis
+    # (Docker-Volume-Konvention - unabhängig davon, ob im Container selbst
+    # ein Syslog-Daemon läuft, was dort ohnehin unüblich ist), oder (c) einen
+    # tatsächlich laufenden klassischen Syslog-Daemon (rsyslog, syslog-ng,
+    # syslogd) auf Bare-Metal-/systemd-Systemen. Ohne einen dieser Gründe ist
+    # die eigene Logdatei nur eine unnötige zweite Datenhaltung neben dem
+    # Journal. Rein stdlib, keine zusätzliche Abhängigkeit.
+    log_handlers = [logging.StreamHandler(sys.stdout)]
+    docker_log_dir_present = os.path.isdir("/log")
+    syslog_detected = is_syslog_daemon_running()
+    file_log_error = None
+
+    if LOG_FILE_EXPLICIT:
+        trigger_reason = "explizite LOG_FILE-Konfiguration"
+    elif docker_log_dir_present:
+        trigger_reason = "/log-Verzeichnis gefunden (Docker-Volume-Konvention)"
+    elif syslog_detected:
+        trigger_reason = "Syslog-Daemon erkannt"
+    else:
+        trigger_reason = None
+
+    if trigger_reason is not None:
+        try:
+            log_dir = os.path.dirname(LOG_FILE) or '.'
+            os.makedirs(log_dir, exist_ok=True)
+            log_handlers.append(
+                RotatingFileHandler(LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
+            )
+        except OSError as e:
+            file_log_error = str(e)
+
     logging.basicConfig(
         level=logging.DEBUG if DEBUG_MODE else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(LOG_FILE, encoding="utf-8") if os.access(os.path.dirname(LOG_FILE) or '.', os.W_OK) else logging.NullHandler()
-        ]
+        handlers=log_handlers
     )
+
+    # HTTP-Bibliotheks-Rauschen (requests nutzt intern urllib3) unabhängig
+    # vom eigenen Log-Level auf WARNING drosseln, damit z.B. "Resetting
+    # dropped connection" o.ä. das eigentliche Debug-Logging nicht zumüllt.
+    for noisy_logger_name in ("urllib3", "urllib3.connectionpool", "requests", "httpx"):
+        logging.getLogger(noisy_logger_name).setLevel(logging.WARNING)
+
+    if trigger_reason is not None and file_log_error:
+        logging.warning(f"Logdatei {LOG_FILE} nicht beschreibbar, verwende nur stdout: {file_log_error}")
+    elif trigger_reason is not None:
+        logging.info(f"Datei-Logging nach {LOG_FILE} aktiv ({trigger_reason}).")
+    else:
+        logging.info("Kein Syslog-Daemon/-Log-Verzeichnis/-Config erkannt - Logging nur nach stdout (journald/docker logs).")
 
     args = parse_arguments()
 
