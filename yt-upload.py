@@ -132,7 +132,13 @@ def _default_log_file():
     return os.path.join(BASE_DIR, "upload.log")
 
 
-LOG_FILE = os.environ.get('LOG_FILE', _default_log_file())
+_env_log_file_override = os.environ.get('LOG_FILE', '').strip()
+LOG_FILE = _env_log_file_override or _default_log_file()
+# Merkt sich, ob LOG_FILE explizit (ENV oder später Config) gesetzt wurde,
+# im Unterschied zur automatischen Pfad-Ermittlung via _default_log_file().
+# Wird von main() genutzt, um den Datei-Handler auch ohne Syslog-Daemon zu
+# aktivieren, wenn der Pfad ausdrücklich konfiguriert wurde.
+LOG_FILE_EXPLICIT = bool(_env_log_file_override)
 CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', "/app/oauth/youtube-upload-credentials.json" if os.path.exists("/app/oauth") else os.path.join(BASE_DIR, "youtube-upload-credentials.json"))
 
 # YouTube Limitierungen & Netzwerk-Chunk-Spezifikationen
@@ -180,6 +186,7 @@ def load_configuration(log_changes=False):
     global AUTO_THUMB_MIN_SEC, AUTO_THUMB_MAX_SEC, ALLOW_OVERWRITE, DYNAMIC_PLAYLISTS
     global CURRENT_CONFIG_HASH
     global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST
+    global LOG_FILE_EXPLICIT
 
     in_dir = IN_DIR
     work_dir = WORK_DIR
@@ -187,6 +194,7 @@ def load_configuration(log_changes=False):
     corrupt_dir = CORRUPT_DIR
     retry_dir = RETRY_DIR
     log_file = LOG_FILE
+    log_file_explicit = LOG_FILE_EXPLICIT
     credentials_file = CREDENTIALS_FILE
 
     default_description = DEFAULT_DESCRIPTION
@@ -248,6 +256,8 @@ def load_configuration(log_changes=False):
             done_dir = config.get('paths', 'done_dir', fallback=done_dir)
             corrupt_dir = config.get('paths', 'corrupt_dir', fallback=corrupt_dir)
             retry_dir = config.get('paths', 'retry_dir', fallback=retry_dir)
+            if config.has_option('paths', 'log_file'):
+                log_file_explicit = True
             log_file = config.get('paths', 'log_file', fallback=log_file)
             credentials_file = config.get('paths', 'credentials_file', fallback=credentials_file)
 
@@ -281,7 +291,10 @@ def load_configuration(log_changes=False):
     DONE_DIR = os.environ.get('DONE_DIR', done_dir)
     CORRUPT_DIR = os.environ.get('CORRUPT_DIR', corrupt_dir)
     RETRY_DIR = os.environ.get('RETRY_DIR', retry_dir)
+    if 'LOG_FILE' in os.environ:
+        log_file_explicit = True
     LOG_FILE = os.environ.get('LOG_FILE', log_file)
+    LOG_FILE_EXPLICIT = log_file_explicit
     CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', credentials_file)
 
     VIDEO_PRIVACY = os.environ.get('VIDEO_PRIVACY', video_privacy)
@@ -718,7 +731,10 @@ def parse_location(location_str):
             loc["altitude"] = float(parts["altitude"])
         return loc
     except Exception as e:
-        logging.warning(f"Konnte Location-String nicht parsen ('{location_str}'): {e}")
+        # Rohe Koordinaten sind Standortdaten und dürfen laut Logging-Policy nur
+        # auf DEBUG-Level erscheinen, nie auf WARNING/INFO oder höher.
+        logging.warning(f"Konnte Location-String nicht parsen: {e}")
+        logging.debug(f"Fehlerhafter Location-String war: '{location_str}'")
         return None
 
 
@@ -1597,13 +1613,29 @@ def main():
 
     # Log-Handler initialisieren
     # stdout-Handler: immer aktiv, wird von journald/docker logs erfasst.
-    # RotatingFileHandler: nur zusätzlich, wenn ein klassischer Syslog-Daemon (rsyslog,
-    # syslog-ng, syslogd) läuft - sonst ist die eigene Logdatei nur eine unnötige zweite
-    # Datenhaltung neben dem Journal. Rein stdlib, keine zusätzliche Abhängigkeit.
+    # RotatingFileHandler: zusätzlich, ausgelöst durch (a) explizite LOG_FILE-
+    # Konfiguration (Config oder ENV), (b) ein vorhandenes /log-Verzeichnis
+    # (Docker-Volume-Konvention - unabhängig davon, ob im Container selbst
+    # ein Syslog-Daemon läuft, was dort ohnehin unüblich ist), oder (c) einen
+    # tatsächlich laufenden klassischen Syslog-Daemon (rsyslog, syslog-ng,
+    # syslogd) auf Bare-Metal-/systemd-Systemen. Ohne einen dieser Gründe ist
+    # die eigene Logdatei nur eine unnötige zweite Datenhaltung neben dem
+    # Journal. Rein stdlib, keine zusätzliche Abhängigkeit.
     log_handlers = [logging.StreamHandler(sys.stdout)]
+    docker_log_dir_present = os.path.isdir("/log")
     syslog_detected = is_syslog_daemon_running()
     file_log_error = None
-    if syslog_detected:
+
+    if LOG_FILE_EXPLICIT:
+        trigger_reason = "explizite LOG_FILE-Konfiguration"
+    elif docker_log_dir_present:
+        trigger_reason = "/log-Verzeichnis gefunden (Docker-Volume-Konvention)"
+    elif syslog_detected:
+        trigger_reason = "Syslog-Daemon erkannt"
+    else:
+        trigger_reason = None
+
+    if trigger_reason is not None:
         try:
             log_dir = os.path.dirname(LOG_FILE) or '.'
             os.makedirs(log_dir, exist_ok=True)
@@ -1619,12 +1651,18 @@ def main():
         handlers=log_handlers
     )
 
-    if syslog_detected and file_log_error:
+    # HTTP-Bibliotheks-Rauschen (requests nutzt intern urllib3) unabhängig
+    # vom eigenen Log-Level auf WARNING drosseln, damit z.B. "Resetting
+    # dropped connection" o.ä. das eigentliche Debug-Logging nicht zumüllt.
+    for noisy_logger_name in ("urllib3", "urllib3.connectionpool", "requests", "httpx"):
+        logging.getLogger(noisy_logger_name).setLevel(logging.WARNING)
+
+    if trigger_reason is not None and file_log_error:
         logging.warning(f"Logdatei {LOG_FILE} nicht beschreibbar, verwende nur stdout: {file_log_error}")
-    elif syslog_detected:
-        logging.info(f"Klassischer Syslog-Daemon erkannt - zusätzliches Datei-Logging nach {LOG_FILE} aktiv.")
+    elif trigger_reason is not None:
+        logging.info(f"Datei-Logging nach {LOG_FILE} aktiv ({trigger_reason}).")
     else:
-        logging.info("Kein klassischer Syslog-Daemon erkannt - Logging nur nach stdout (journald/docker logs).")
+        logging.info("Kein Syslog-Daemon/-Log-Verzeichnis/-Config erkannt - Logging nur nach stdout (journald/docker logs).")
 
     args = parse_arguments()
 
