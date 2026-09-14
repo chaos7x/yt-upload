@@ -17,10 +17,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "yt-upload.py"
 
 
-def _load_yt_upload_module():
-    spec = importlib.util.spec_from_file_location("yt_upload", MODULE_PATH)
+GET_TOKEN_PATH = REPO_ROOT / "get_token.py"
+
+
+def _load_module_from_path(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["yt_upload"] = module
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -28,4 +31,10 @@ def _load_yt_upload_module():
 @pytest.fixture(scope="session")
 def yt_upload():
     """Lädt yt-upload.py einmal pro Test-Session und stellt es als Modul-Objekt bereit."""
-    return _load_yt_upload_module()
+    return _load_module_from_path("yt_upload", MODULE_PATH)
+
+
+@pytest.fixture(scope="session")
+def get_token_module():
+    """Lädt get_token.py einmal pro Test-Session und stellt es als Modul-Objekt bereit."""
+    return _load_module_from_path("get_token", GET_TOKEN_PATH)
