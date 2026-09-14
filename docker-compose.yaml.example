@@ -43,7 +43,7 @@ services:
       - default
 
 # ==========================================
-# Healthcheck, muss seperat altiviert werden, wenn yt-upload sich unter /app befindet
+# Healthcheck (optional), ist aktiviert
 # ==========================================
 #    healthcheck:
 #      test: ["CMD", "python3", "/app/yt-upload", "--healthcheck"]
