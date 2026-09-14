@@ -27,7 +27,7 @@ SYSTEM-VORAUSSETZUNGEN:
 """
 
 __title__ = "YouTube Video Uploader & CLI-Uploader"
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 import argparse
 import configparser
@@ -140,6 +140,17 @@ LOG_FILE = _env_log_file_override or _default_log_file()
 # aktivieren, wenn der Pfad ausdrücklich konfiguriert wurde.
 LOG_FILE_EXPLICIT = bool(_env_log_file_override)
 CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', "/app/oauth/youtube-upload-credentials.json" if os.path.exists("/app/oauth") else os.path.join(BASE_DIR, "youtube-upload-credentials.json"))
+
+# Heartbeat-Datei für den Healthcheck (z.B. Docker HEALTHCHECK). Der Dämon
+# aktualisiert sie regelmäßig; ein separater, sehr leichtgewichtiger Aufruf
+# desselben Skripts (--healthcheck) prüft nur, ob sie frisch genug ist -
+# ohne Config zu laden oder Verzeichnisse anzulegen, damit der Healthcheck
+# selbst schnell ist und keine Nebenwirkungen hat.
+HEALTH_FILE = os.environ.get('HEALTH_FILE', os.path.join(tempfile.gettempdir(), "yt-upload.health"))
+# Wie alt die Heartbeat-Datei maximal sein darf, bevor --healthcheck als
+# "unhealthy" (Exit-Code 1) gilt. Grosszügig bemessen, da ein einzelner
+# Upload-Chunk bei langsamer Verbindung durchaus mehrere Minuten dauern kann.
+HEALTH_STALE_SECONDS = int(os.environ.get('HEALTH_STALE_SECONDS', '300'))
 
 # YouTube Limitierungen & Netzwerk-Chunk-Spezifikationen
 SEGMENT_TIME_SEC = 36000     # Maximum 10 Stunden pro Video vor automatischem Splitting
@@ -587,6 +598,7 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
         while True:
             time.sleep(10)
             load_configuration(log_changes=True)
+            write_heartbeat()
             existing = find_existing_video(target_dir)
             if existing:
                 return existing
@@ -594,8 +606,15 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
     # Event-Loop für inotify
     while True:
         try:
-            for event in inotify_adapter.event_gen(yield_nones=False, timeout_s=10):
+            # yield_nones=True sorgt dafür, dass die Schleife auch ohne
+            # Dateisystem-Events alle timeout_s Sekunden die Kontrolle
+            # zurückbekommt (Config-Reload, Heartbeat, Polling-Fallback).
+            # Mit yield_nones=False (wie zuvor) wurde der "if event is None"-
+            # Zweig unten nie erreicht - totes Coder, das effektiv jede
+            # periodische Prüfung während des Wartens verhinderte.
+            for event in inotify_adapter.event_gen(yield_nones=True, timeout_s=10):
                 load_configuration(log_changes=True)
+                write_heartbeat()
 
                 if event is None:
                     existing = find_existing_video(target_dir)
@@ -1284,6 +1303,7 @@ def upload_single_video(
                         video_id = resp_data.get("id")
                         uploaded_bytes = file_size
                         chunk_success = True
+                        write_heartbeat()
                         logging.info(f"Upload ERFOLGREICH abgeschlossen! Video-ID: {video_id}")
                         break
 
@@ -1305,6 +1325,7 @@ def upload_single_video(
                         pct = (uploaded_bytes / file_size) * 100
                         logging.info(f"Fortschritt: {uploaded_bytes / (1024*1024):.1f} / {file_size / (1024*1024):.1f} MB ({pct:.1f}%)")
                         chunk_success = True
+                        write_heartbeat()
                         break
 
                     # Token abgelaufen: Access Token erneuern und erneut versuchen
@@ -1538,6 +1559,51 @@ def process_single_file(file_path, args=None):
 # ==============================================================================
 # CLI PARSER & HAUPTEINSTIEGSPUNKT
 # ==============================================================================
+def write_heartbeat():
+    """
+    Aktualisiert die Heartbeat-Datei mit dem aktuellen Zeitstempel. Wird an
+    Stellen aufgerufen, die auch während einer langen Einzeloperation (z.B.
+    mehrstündiger Resumable-Upload) regelmäßig durchlaufen werden - nicht nur
+    nach Abschluss einer ganzen Datei -, damit ein --healthcheck echte Hänger
+    erkennt statt nur "Prozess lebt noch".
+    Schlägt der Schreibvorgang fehl (z.B. kein Schreibzugriff auf /tmp), wird
+    das nur auf DEBUG geloggt - ein Healthcheck-Problem soll nicht den
+    eigentlichen Upload zum Absturz bringen.
+    """
+    try:
+        with open(HEALTH_FILE, "w") as f:
+            f.write(str(time.time()))
+    except OSError as e:
+        logging.debug(f"Konnte Heartbeat-Datei {HEALTH_FILE} nicht schreiben: {e}")
+
+
+def run_healthcheck() -> int:
+    """
+    Leichtgewichtige Prüfung für externe Healthchecks (z.B. Docker HEALTHCHECK
+    oder Kubernetes livenessProbe): prüft nur, ob die Heartbeat-Datei existiert
+    und nicht älter als HEALTH_STALE_SECONDS ist. Lädt bewusst keine Config und
+    legt keine Verzeichnisse an, damit der Aufruf schnell ist und keine
+    Nebenwirkungen hat (wird typischerweise alle paar Sekunden aufgerufen).
+    Gibt 0 (healthy) oder 1 (unhealthy) zurück, analog zu Exit-Codes.
+    """
+    if not os.path.isfile(HEALTH_FILE):
+        print(f"UNHEALTHY: Heartbeat-Datei {HEALTH_FILE} nicht gefunden (Dämon noch nicht gestartet?).")
+        return 1
+
+    try:
+        age = time.time() - os.path.getmtime(HEALTH_FILE)
+    except OSError as e:
+        print(f"UNHEALTHY: Heartbeat-Datei {HEALTH_FILE} nicht lesbar: {e}")
+        return 1
+
+    if age > HEALTH_STALE_SECONDS:
+        print(f"UNHEALTHY: Heartbeat ist {age:.0f}s alt (Limit: {HEALTH_STALE_SECONDS}s).")
+        return 1
+
+    print(f"HEALTHY: Heartbeat ist {age:.0f}s alt.")
+    return 0
+
+
 def parse_arguments():
     """Initialisiert das Parsing der Kommandozeilenargumente."""
     parser = argparse.ArgumentParser(
@@ -1548,6 +1614,7 @@ def parse_arguments():
     parser.add_argument("file", nargs="?", help="Pfad zur hochzuladenden Videodatei (im manuellen Modus)")
     parser.add_argument("-a", "--auto", action="store_true", help="Automatischer Batch-Modus für ein Verzeichnis")
     parser.add_argument("-D", "--daemon", action="store_true", help="Dämon-Modus: Dauerhafte inotify-Verzeichnisüberwachung")
+    parser.add_argument("--healthcheck", action="store_true", help="Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort (für Docker HEALTHCHECK)")
 
     parser.add_argument("-t", "--title", help="Video-Titel (Standard: Metadaten/Dateiname)")
     parser.add_argument("-d", "--description", help="Video-Beschreibung")
@@ -1608,6 +1675,15 @@ def acquire_instance_lock():
 
 def main():
     """Hauptablaufsteuerung abhängig von den übergebenen Parametern."""
+    # --healthcheck wird bewusst vor jeglicher Config-/Verzeichnis-/Logging-
+    # Initialisierung behandelt: der Aufruf soll schnell sein und keine
+    # Nebenwirkungen haben, da er typischerweise alle paar Sekunden von einem
+    # externen Healthcheck (Docker HEALTHCHECK, Kubernetes livenessProbe)
+    # ausgeführt wird.
+    args = parse_arguments()
+    if args.healthcheck:
+        sys.exit(run_healthcheck())
+
     load_configuration(log_changes=False)
     ensure_directories()
 
@@ -1664,8 +1740,6 @@ def main():
     else:
         logging.info("Kein Syslog-Daemon/-Log-Verzeichnis/-Config erkannt - Logging nur nach stdout (journald/docker logs).")
 
-    args = parse_arguments()
-
     logging.info(f"=== {__title__} v{__version__} gestartet ===")
 
     if not acquire_instance_lock():
@@ -1698,6 +1772,7 @@ def main():
         try:
             while True:
                 load_configuration(log_changes=True)
+                write_heartbeat()
 
                 # Bei Pfadänderung inotify Tree neu initialisieren
                 if HAS_INOTIFY and current_watched_dir != IN_DIR:
