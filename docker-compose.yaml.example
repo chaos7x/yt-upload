@@ -42,12 +42,15 @@ services:
     networks:
       - default
 
-    healthcheck:
-      test: ["CMD", "python3", "/usr/local/bin/fetchbridge", "--healthcheck"]
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
+# ==========================================
+# Healthcheck, muss seperat altiviert werden, wenn yt-upload sich unter /app befindet
+# ==========================================
+#    healthcheck:
+#      test: ["CMD", "python3", "/app/yt-upload", "--healthcheck"]
+#      interval: 30s
+#      timeout: 5s
+#      start_period: 15s
+#      retries: 3
 
 volumes:
   app:
