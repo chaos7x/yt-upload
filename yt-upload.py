@@ -27,7 +27,7 @@ SYSTEM-VORAUSSETZUNGEN:
 """
 
 __title__ = "YouTube Video Uploader & CLI-Uploader"
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 import argparse
 import configparser
@@ -68,10 +68,24 @@ os.environ['DEBUG'] = '1' if DEBUG_MODE else '0'
 # ------------------------------------------------------------------------------
 try:
     import inotify.adapters
+    import inotify.constants
     HAS_INOTIFY = True
 except ImportError:
     inotify = None
     HAS_INOTIFY = False
+
+# Watch-Mask beschränkt auf die tatsächlich relevanten Events (abgeschlossene
+# Schreibvorgänge und Verschiebungen ins Verzeichnis). Ohne diese Einschränkung
+# abonniert InotifyTree ALLE Event-Typen, inkl. reiner Verzeichnis-Lesezugriffe
+# (IN_OPEN/IN_ACCESS/IN_CLOSE_NOWRITE mit IN_ISDIR) - genau solche Zugriffe
+# erzeugt aber find_existing_video() selbst via os.walk() auf dem überwachten
+# Baum. Ohne Filterung entsteht dadurch eine sich selbst befeuernde
+# Event-Schleife (eigener Scan -> eigene Events -> erneuter Trigger -> ...),
+# die unabhängig von echten Video-Uploads dauerhaft CPU verbraucht.
+WATCH_MASK = (
+    (inotify.constants.IN_CLOSE_WRITE | inotify.constants.IN_MOVED_TO)
+    if HAS_INOTIFY else None
+)
 
 # ==============================================================================
 # KONFIGURATION & STANDARD-PFADE
@@ -575,6 +589,27 @@ def find_existing_video(target_dir=IN_DIR):
     return None
 
 
+_last_periodic_tasks_run = 0.0
+
+
+def run_periodic_tasks(min_interval_sec=10):
+    """
+    Führt load_configuration()+write_heartbeat() gedrosselt aus (max. alle
+    min_interval_sec Sekunden), statt bei jedem einzelnen inotify-Event.
+    Ohne diese Drosselung kann eine Event-Flut (z.B. während eine große Datei
+    gerade per rsync/scp nach IN_DIR kopiert wird - viele IN_MODIFY-Events pro
+    Sekunde) die CPU durch permanentes Config-Neuladen auslasten, obwohl der
+    Daemon aus Nutzersicht "idle" ist (noch kein Upload gestartet).
+    """
+    global _last_periodic_tasks_run
+    now = time.monotonic()
+    if now - _last_periodic_tasks_run < min_interval_sec:
+        return
+    _last_periodic_tasks_run = now
+    load_configuration(log_changes=True)
+    write_heartbeat()
+
+
 def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
     """
     Blockiert den Prozess im Dämonenmodus, bis eine neue Datei per inotify signalisiert
@@ -613,8 +648,7 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
             # Zweig unten nie erreicht - totes Coder, das effektiv jede
             # periodische Prüfung während des Wartens verhinderte.
             for event in inotify_adapter.event_gen(yield_nones=True, timeout_s=10):
-                load_configuration(log_changes=True)
-                write_heartbeat()
+                run_periodic_tasks()
 
                 if event is None:
                     existing = find_existing_video(target_dir)
@@ -624,6 +658,13 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
                     continue
 
                 (_, type_names, path, filename) = event
+
+                # Zusätzliche Absicherung (falls die installierte inotify-Version
+                # mask= ignoriert): reine Verzeichnis-Events sofort verwerfen,
+                # bevor unnötige Vergleiche/Logs anfallen.
+                if "IN_ISDIR" in type_names:
+                    continue
+
                 # Reagiere auf abgeschlossene Schreibvorgänge oder Verschiebungen
                 if any(t in type_names for t in ["IN_CLOSE_WRITE", "IN_MOVED_TO"]):
                     if filename.lower().endswith(valid_exts):
@@ -1778,7 +1819,7 @@ def main():
                 if HAS_INOTIFY and current_watched_dir != IN_DIR:
                     try:
                         logging.info(f"Initialisiere InotifyTree auf: {IN_DIR}")
-                        inotify_adapter = inotify.adapters.InotifyTree(IN_DIR)
+                        inotify_adapter = inotify.adapters.InotifyTree(IN_DIR, mask=WATCH_MASK)
                         current_watched_dir = IN_DIR
                     except Exception as e:
                         logging.error(f"Konnte InotifyTree für {IN_DIR} nicht initialisieren: {e}")
