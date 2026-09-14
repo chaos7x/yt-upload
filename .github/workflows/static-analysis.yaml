@@ -1,0 +1,61 @@
+name: Static Analysis
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  ruff:
+    name: Ruff (Linting)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ruff installieren
+        run: pip install ruff
+
+      - name: Ruff ausführen
+        run: ruff check . --output-format=github
+
+  bandit:
+    name: Bandit (Security)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Bandit installieren
+        run: pip install bandit
+
+      # -ll = nur MEDIUM/HIGH Severity melden, damit CI nicht bei jedem
+      # Kleinkram (LOW) rot wird. Bei Bedarf auf -lll (nur HIGH) oder ganz
+      # ohne Flag (alles) anpassen.
+      - name: Bandit ausführen
+        run: bandit -r . -ll -x ./tests
+
+  codeql:
+    name: CodeQL (Security, tiefere Analyse)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CodeQL initialisieren
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: CodeQL-Analyse ausführen
+        uses: github/codeql-action/analyze@v3

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# ruff: noqa: EXE001 - Shebang ist reine Bequemlichkeit für optionale direkte
+# Ausführung (./get_token.py); das eigentliche Ausführbar-Bit übersteht
+# Git-Checkouts/Web-Uploads nicht zuverlässig, das Skript läuft ganz normal
+# auch via `python3 get_token.py` ohne +x.
 # Copyright (C) 2026 Chaos7x
 #
 # This program is free software: you can redistribute it and/or modify
@@ -11,11 +15,11 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 
-from datetime import datetime, timezone, timedelta
 import json
 import os
 import secrets
 import sys
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
