@@ -53,6 +53,9 @@ COPY upload.conf.example /etc/yt-upload/upload.conf
 RUN ln -s /etc/global.bashrc /tmp/.bashrc \
     && ln -s /etc/global.bashrc /app/.bashrc
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD python3 /app/yt-upload.py --healthcheck || exit 1
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 ARG VERSION
