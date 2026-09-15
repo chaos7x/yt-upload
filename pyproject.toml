@@ -1,0 +1,19 @@
+[project]
+name = "yt-upload"
+version = "1.2.2"
+description = "Automatisierter YouTube Upload Workflow"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[project.scripts]
+yt-upload = "yt_upload.main:main"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+preview = true
+select = ["E", "F", "I", "LOG", "BLE", "PLW1510", "DTZ", "SIM", "PIE", "C4", "EXE"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
