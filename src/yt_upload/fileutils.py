@@ -11,6 +11,7 @@ pipeline<->youtube_api-Import wäre sonst zirkulär.
 import json
 import logging
 import os
+import sys
 import tempfile
 
 from yt_upload import config
@@ -25,7 +26,6 @@ def ensure_directories():
             os.makedirs(d, exist_ok=True)
         except (PermissionError, OSError) as e:
             sys.stderr.write(f"Warnung: Kann Verzeichnis {d} nicht anlegen ({e}).\n")
-
 
 
 def unique_path(directory, filename):

@@ -19,7 +19,7 @@ COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
 # LAYER 2: System-Tools & C-Bibliotheken über apt
 # (Python-Module wandern ab jetzt in pip!)
 # ==========================================
-# Installiert ExifTool, Midnight Commander (mc) 
+# Installiert ExifTool, Midnight Commander (mc)
 # sowie ca-certificates direkt über den Paketmanager.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcom-err2 \
@@ -27,14 +27,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# ==========================================
-# LAYER 3: Python-Abhängigkeiten über pip installieren
-# ==========================================
-RUN pip install --no-cache-dir --break-system-packages requests inotify
-
 # Arbeitsverzeichnis & Home-Variable setzen
 WORKDIR /app
 ENV HOME=/app
+
+# ==========================================
+# LAYER 3: yt_upload-Package + Python-Abhängigkeiten über pip installieren
+# ==========================================
+# Anders als im Debian-/Alpine-Dockerfile: hier gibt es keinen Grund für
+# --target/PYTHONPATH-Klimmzüge oder eine separate Builder-Stage, um pip aus
+# dem finalen Image rauszuhalten - dieses Image baut ja bewusst komplett auf
+# pip auf (python:3-slim bringt pip schon mit). ".[daemon]" installiert das
+# eigene Package UND requests/inotify in einem Rutsch, direkt aus den in
+# pyproject.toml deklarierten Dependencies - keine doppelte Pflege der
+# Paketnamen an zwei Stellen mehr.
+COPY pyproject.toml /app/pyproject.toml
+COPY src/ /app/src/
+RUN pip install --no-cache-dir --break-system-packages ".[daemon]" \
+    && rm -rf /app/pyproject.toml /app/src /app/build
 
 # ------------------------------------------
 # LAYER 4: Daten- & Log-Verzeichnisse anlegen
@@ -47,7 +57,6 @@ RUN mkdir -p /videos /log /etc/yt-upload/conf.d && chmod 777 /videos /log
 COPY bashrc /etc/global.bashrc
 COPY --chmod=755 get_token.py /usr/local/bin/get_token
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY --chmod=755 yt-upload.py /usr/local/bin/yt-upload
 COPY upload.conf.example /etc/yt-upload/upload.conf
 
 # ------------------------------------------
@@ -57,12 +66,7 @@ RUN ln -s /etc/global.bashrc /tmp/.bashrc \
     && ln -s /etc/global.bashrc /app/.bashrc
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD sh -c '\
-    if [ -f /app/yt-upload ]; then \
-      exec /app/yt-upload --healthcheck; \
-    else \
-      exec /usr/local/bin/yt-upload --healthcheck; \
-    fi'
+  CMD ["/usr/local/bin/yt-upload", "--healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 

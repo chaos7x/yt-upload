@@ -39,7 +39,7 @@ def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
         if last_size != -1 and current_size == last_size:
             break
         elif last_size != -1:
-            logger.info(f"Datei wächst noch ({current_size / (1024*1024):.1f} MB)... warte weiter.")
+            logger.info(f"Datei wächst noch ({current_size / (1024 * 1024):.1f} MB)... warte weiter.")
 
         last_size = current_size
         time.sleep(wait_interval)
@@ -184,7 +184,6 @@ def extract_metadata_and_thumb(file_path):
                 os.remove(temp_attach)
 
     return metadata
-
 
 
 def split_video_if_needed(work_path):

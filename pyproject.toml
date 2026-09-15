@@ -1,6 +1,6 @@
 [project]
 name = "yt-upload"
-version = "1.2.2"
+version = "1.2.3"
 description = "Automatisierter YouTube Upload Workflow"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,12 +18,14 @@ yt-upload = "yt_upload.main:main"
 
 # Wird sowohl für die Bare-Metal-Installation als auch im Docker-Build genutzt:
 # `pip install --break-system-packages --no-deps .` Die oben deklarierten
-# Dependencies dienen nur der Dokumentation/Metadaten (pip show yt-upload) -
-# tatsächlich installiert werden requests/inotify bewusst über apt/apk
-# (python3-requests + python3-inotify bzw. py3-requests + py3-inotify), nicht
-# über PyPI. --no-deps stellt in jeder Installationsart sicher, dass pip
-# wirklich nur das eigene Package installiert und nichts aus dem Netz
-# nachlädt oder mit der apt/apk-Version kollidiert.
+# Dependencies dienen primär der Dokumentation/Metadaten (pip show yt-upload).
+# Tatsächlich installiert wird requests je nach Umgebung über apt/apk
+# (python3-requests/py3-requests) oder direkt per pip (Dockerfile.pyimg);
+# inotify kommt unter Debian/Alpine ebenfalls über pip (siehe Dockerfile bzw.
+# Dockerfile.alpine), da das apk-Paket py3-inotify ein anderes, unpassendes
+# Projekt packt. --no-deps stellt in den apt/apk-basierten Installationsarten
+# sicher, dass pip nur das eigene Package installiert und requests nicht
+# zusätzlich von PyPI nachlädt.
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -35,6 +37,8 @@ where = ["src"]
 line-length = 88
 target-version = "py311"
 preview = true
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "LOG", "BLE", "PLW1510", "DTZ", "SIM", "PIE", "C4", "EXE"]
 ignore = ["E501"]
 

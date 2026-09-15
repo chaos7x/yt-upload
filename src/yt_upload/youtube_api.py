@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import time
+import webbrowser
 
 import requests
 
@@ -80,7 +81,6 @@ def get_access_token(cred_file=None, client_secrets_file=None):
 
 class PermanentUploadError(RuntimeError):
     """Wird bei dauerhaften (nicht behebbaren) API-Fehlern ausgelöst, um sinnloses Retrying zu vermeiden."""
-
 
 
 def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.VIDEO_PRIVACY,
@@ -199,8 +199,6 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
     except (requests.exceptions.RequestException, ValueError, KeyError, OSError) as e:
         logger.error(f"Fehler bei Playlist-API: {e}")
     return False
-
-
 
 
 def upload_single_video(
@@ -421,7 +419,7 @@ def upload_single_video(
                             logger.warning(f"Offset korrigiert auf 256-KiB-Grenze: {uploaded_bytes} Bytes")
 
                         pct = (uploaded_bytes / file_size) * 100
-                        logger.info(f"Fortschritt: {uploaded_bytes / (1024*1024):.1f} / {file_size / (1024*1024):.1f} MB ({pct:.1f}%)")
+                        logger.info(f"Fortschritt: {uploaded_bytes / (1024 * 1024):.1f} / {file_size / (1024 * 1024):.1f} MB ({pct:.1f}%)")
                         chunk_success = True
                         write_heartbeat()
                         break
