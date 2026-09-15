@@ -55,7 +55,7 @@ RUN mkdir -p /videos /log /etc/yt-upload/conf.d && chmod 777 /videos /log
 # LAYER 5: Lokale Skripte & Configs kopieren
 # ------------------------------------------
 COPY bashrc /etc/global.bashrc
-COPY --chmod=755 get_token.py /usr/local/bin/get_token
+COPY --chmod=755 src/get_token/get_token.py /usr/local/bin/get_token
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY upload.conf.example /etc/yt-upload/upload.conf
 
