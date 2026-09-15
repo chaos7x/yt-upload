@@ -14,7 +14,7 @@ from yt_upload.text_utils import sanitize_text, truncate_title
 logger = logging.getLogger(__name__)
 
 
-def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
+def is_file_ready_and_valid(file_path, wait_interval=5, max_checks=180):
     """
     Prüft, ob eine Datei vollständig geschrieben wurde (Größenprüfung über Zeit)
     und ob es sich um einen fehlerfreien Video-Stream handelt (mittels ffprobe).
