@@ -27,7 +27,7 @@ SYSTEM-VORAUSSETZUNGEN:
 """
 
 __title__ = "YouTube Video Uploader & CLI-Uploader"
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 import argparse
 import configparser
