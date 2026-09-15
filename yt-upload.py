@@ -27,10 +27,10 @@ SYSTEM-VORAUSSETZUNGEN:
 """
 
 __title__ = "YouTube Video Uploader & CLI-Uploader"
-__version__ = "1.2.2"
 
 import argparse
 import configparser
+import contextlib
 import glob
 import hashlib
 import json
@@ -97,6 +97,11 @@ WATCH_MASK = (
 CONF_PATH = os.environ.get('CONFIG_FILE', '/etc/yt-upload/upload.conf')
 CONF_D_DIR = os.environ.get('CONF_D_DIR', os.path.join(os.path.dirname(CONF_PATH), 'conf.d'))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# TODO: Nach dem Package-Split (yt_upload.main:main) auf
+# importlib.metadata.version("yt-upload") umstellen, statt hier hartkodiert
+# zu pflegen - siehe Kommentar in pyproject.toml.
+__version__ = "1.2.2"
 
 # Dynamic Path Detection: Docker Container Mounts (/videos) vs. Bare-Metal Host
 IN_DIR = os.environ.get('IN_DIR', "/videos/in" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "in"))
@@ -917,10 +922,8 @@ def extract_metadata_and_thumb(file_path):
     finally:
         # Aufräumen der temporären Attachment-Datei
         if os.path.exists(temp_attach):
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(temp_attach)
-            except OSError:
-                pass
 
     return metadata
 

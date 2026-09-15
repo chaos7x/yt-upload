@@ -70,29 +70,29 @@ def large_video_file(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def no_real_sleep(monkeypatch, yt_upload):
+def no_real_sleep(monkeypatch, youtube_api):
     """Verhindert echte time.sleep()-Aufrufe während der Retry-Tests (2**attempt Sekunden)."""
-    monkeypatch.setattr(yt_upload.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(youtube_api.time, "sleep", lambda seconds: None)
 
 
 @pytest.fixture(autouse=True)
-def stub_access_token(monkeypatch, yt_upload):
+def stub_access_token(monkeypatch, youtube_api):
     """Ersetzt get_access_token() standardmäßig durch einen festen Dummy-Token."""
-    monkeypatch.setattr(yt_upload, "get_access_token", lambda cred_file=None, client_secrets_file=None: "fake-token")
+    monkeypatch.setattr(youtube_api, "get_access_token", lambda cred_file=None, client_secrets_file=None: "fake-token")
 
 
-def _install_fake_session(monkeypatch, yt_upload, fake_session):
-    monkeypatch.setattr(yt_upload.requests, "Session", lambda: fake_session)
+def _install_fake_session(monkeypatch, youtube_api, fake_session):
+    monkeypatch.setattr(youtube_api.requests, "Session", lambda: fake_session)
 
 
 class TestChunkUploadSuccess:
-    def test_single_chunk_success_returns_video_id(self, yt_upload, monkeypatch, video_file):
+    def test_single_chunk_success_returns_video_id(self, youtube_api, monkeypatch, video_file):
         init_response = FakeResponse(200, headers={"Location": "https://fake/session1"})
         put_response = FakeResponse(200, json_data={"id": "vid_success"})
         fake_session = FakeSession(init_response, [put_response])
-        _install_fake_session(monkeypatch, yt_upload, fake_session)
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
 
-        result = yt_upload.upload_single_video(
+        result = youtube_api.upload_single_video(
             file_path=video_file, title="Test", desc="", category=None, tags=None,
             rec_date=None, thumb_path=None, playlist_name=None
         )
@@ -100,14 +100,14 @@ class TestChunkUploadSuccess:
         assert result == "vid_success"
         assert fake_session.put_calls == 1
 
-    def test_multi_chunk_upload_continues_after_308(self, yt_upload, monkeypatch, large_video_file):
+    def test_multi_chunk_upload_continues_after_308(self, youtube_api, monkeypatch, large_video_file):
         init_response = FakeResponse(200, headers={"Location": "https://fake/session-multi"})
         put_308 = FakeResponse(308, headers={"Range": "bytes=0-262143"})
         put_200 = FakeResponse(200, json_data={"id": "vid_multi_chunk"})
         fake_session = FakeSession(init_response, [put_308, put_200])
-        _install_fake_session(monkeypatch, yt_upload, fake_session)
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
 
-        result = yt_upload.upload_single_video(
+        result = youtube_api.upload_single_video(
             file_path=large_video_file, title="Test", desc="", category=None, tags=None,
             rec_date=None, thumb_path=None, playlist_name=None,
             chunksize=262144
@@ -120,20 +120,20 @@ class TestChunkUploadSuccess:
 
 
 class TestChunkUploadTokenRefresh:
-    def test_401_triggers_refresh_and_retries_successfully(self, yt_upload, monkeypatch, video_file):
+    def test_401_triggers_refresh_and_retries_successfully(self, youtube_api, monkeypatch, video_file):
         init_response = FakeResponse(200, headers={"Location": "https://fake/session2"})
         put_401 = FakeResponse(401, text="unauthorized")
         put_ok = FakeResponse(200, json_data={"id": "vid_after_refresh"})
         fake_session = FakeSession(init_response, [put_401, put_ok])
-        _install_fake_session(monkeypatch, yt_upload, fake_session)
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
 
         token_calls = []
         monkeypatch.setattr(
-            yt_upload, "get_access_token",
+            youtube_api, "get_access_token",
             lambda cred_file=None, client_secrets_file=None: token_calls.append(1) or "refreshed-token"
         )
 
-        result = yt_upload.upload_single_video(
+        result = youtube_api.upload_single_video(
             file_path=video_file, title="Test", desc="", category=None, tags=None,
             rec_date=None, thumb_path=None, playlist_name=None
         )
@@ -142,21 +142,21 @@ class TestChunkUploadTokenRefresh:
         assert fake_session.put_calls == 2
         assert len(token_calls) >= 2  # initialer Token + mind. 1 Refresh
 
-    def test_retry_after_401_uses_the_new_token(self, yt_upload, monkeypatch, large_video_file):
+    def test_retry_after_401_uses_the_new_token(self, youtube_api, monkeypatch, large_video_file):
         """Stellt sicher, dass der Retry-Header wirklich den NEUEN Token trägt, nicht den alten."""
         init_response = FakeResponse(200, headers={"Location": "https://fake/session-token"})
         put_401 = FakeResponse(401, text="unauthorized")
         put_ok = FakeResponse(200, json_data={"id": "vid_token_check"})
         fake_session = FakeSession(init_response, [put_401, put_ok])
-        _install_fake_session(monkeypatch, yt_upload, fake_session)
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
 
         tokens = iter(["token-A", "token-B", "token-C", "token-D"])
         monkeypatch.setattr(
-            yt_upload, "get_access_token",
+            youtube_api, "get_access_token",
             lambda cred_file=None, client_secrets_file=None: next(tokens)
         )
 
-        yt_upload.upload_single_video(
+        youtube_api.upload_single_video(
             file_path=large_video_file, title="Test", desc="", category=None, tags=None,
             rec_date=None, thumb_path=None, playlist_name=None,
             chunksize=262144
@@ -169,16 +169,16 @@ class TestChunkUploadTokenRefresh:
 
 
 class TestChunkUploadErrorHandling:
-    def test_permanent_client_error_aborts_without_retry(self, yt_upload, monkeypatch, video_file):
+    def test_permanent_client_error_aborts_without_retry(self, youtube_api, monkeypatch, video_file):
         init_response = FakeResponse(200, headers={"Location": "https://fake/session3"})
         put_400 = FakeResponse(400, text="bad request")
         # 5 identische Antworten bereitstellen, damit ein Test-Fehlschlag (kein Abbruch)
         # nicht an einem IndexError scheitert, sondern am fehlenden PermanentUploadError
         fake_session = FakeSession(init_response, [put_400] * 5)
-        _install_fake_session(monkeypatch, yt_upload, fake_session)
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
 
-        with pytest.raises(yt_upload.PermanentUploadError):
-            yt_upload.upload_single_video(
+        with pytest.raises(youtube_api.PermanentUploadError):
+            youtube_api.upload_single_video(
                 file_path=video_file, title="Test", desc="", category=None, tags=None,
                 rec_date=None, thumb_path=None, playlist_name=None
             )
@@ -186,14 +186,14 @@ class TestChunkUploadErrorHandling:
         # Kernpunkt des Fixes: bei einem dauerhaften Fehler wird NICHT 5x retried
         assert fake_session.put_calls == 1
 
-    def test_transient_server_error_retries_then_succeeds(self, yt_upload, monkeypatch, video_file):
+    def test_transient_server_error_retries_then_succeeds(self, youtube_api, monkeypatch, video_file):
         init_response = FakeResponse(200, headers={"Location": "https://fake/session4"})
         put_503 = FakeResponse(503, text="service unavailable")
         put_ok = FakeResponse(200, json_data={"id": "vid_after_503"})
         fake_session = FakeSession(init_response, [put_503, put_ok])
-        _install_fake_session(monkeypatch, yt_upload, fake_session)
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
 
-        result = yt_upload.upload_single_video(
+        result = youtube_api.upload_single_video(
             file_path=video_file, title="Test", desc="", category=None, tags=None,
             rec_date=None, thumb_path=None, playlist_name=None
         )
@@ -201,13 +201,13 @@ class TestChunkUploadErrorHandling:
         assert result == "vid_after_503"
         assert fake_session.put_calls == 2
 
-    def test_max_retries_exceeded_raises_runtime_error(self, yt_upload, monkeypatch, video_file):
+    def test_max_retries_exceeded_raises_runtime_error(self, youtube_api, monkeypatch, video_file):
         init_response = FakeResponse(200, headers={"Location": "https://fake/session5"})
         fake_session = FakeSession(init_response, [FakeResponse(503, text="x")] * 5)
-        _install_fake_session(monkeypatch, yt_upload, fake_session)
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
 
         with pytest.raises(RuntimeError, match="Max Retries"):
-            yt_upload.upload_single_video(
+            youtube_api.upload_single_video(
                 file_path=video_file, title="Test", desc="", category=None, tags=None,
                 rec_date=None, thumb_path=None, playlist_name=None
             )
