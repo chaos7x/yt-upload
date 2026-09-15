@@ -5,7 +5,40 @@
 FROM mwader/static-ffmpeg:latest AS ffmpeg-binaries
 
 # ==========================================
-# STUFE 1: FINAL STAGE (Schlankes Laufzeit-Image)
+# STUFE 1: Builder - installiert das yt_upload-Package isoliert
+# ==========================================
+# Eigene Stage, damit pip/setuptools NICHT im finalen Laufzeit-Image landen.
+FROM alpine:3 AS builder
+
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    py3-setuptools
+
+WORKDIR /build
+COPY pyproject.toml /build/pyproject.toml
+COPY src/ /build/src/
+# --target statt --prefix: installiert die Library-Dateien FLACH, ohne
+# sysconfig-spezifische site-packages-Verschachtelung anzunehmen - identischer
+# Ansatz wie im Debian-Dockerfile (siehe dort für die ausführliche Begründung;
+# genau diese Annahme war der Grund, warum die --prefix-Variante hier zuvor
+# mit ModuleNotFoundError fehlschlug).
+RUN pip install --break-system-packages --no-deps --no-cache-dir --no-build-isolation --target=/install /build
+# inotify separat per pip statt über apk: Alpines py3-inotify-Paket packt
+# tatsächlich "pyinotify" (ein anderes, älteres Projekt mit anderer API),
+# nicht das hier tatsächlich genutzte "inotify"-Paket von dsoprea
+# (import inotify.adapters/inotify.constants). --no-deps hier weggelassen,
+# damit inotify seine eigenen (falls vorhandenen) Abhängigkeiten von PyPI
+# mitbekommt - für requests bleibt es beim apk-Paket, siehe LAYER 2 unten.
+# ACHTUNG: dsoprea/inotify hatte historisch ein bekanntes musl-libc-Problem
+# (AttributeError bei ctypes-Zugriff auf "errno", seit 2016 im Quellcode
+# gefixt) - beim ersten Alpine-Build unbedingt mit
+# `docker run --rm <image> yt-upload -D` (kurz laufen lassen) verifizieren,
+# dass der PyPI-Release den Fix tatsächlich enthält.
+RUN pip install --break-system-packages --no-cache-dir --no-build-isolation --target=/install inotify
+
+# ==========================================
+# STUFE 2: FINAL STAGE (schlankes Laufzeit-Image, kein pip/setuptools)
 # ==========================================
 FROM alpine:3
 
@@ -18,12 +51,14 @@ COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
 # ------------------------------------------
 # LAYER 2: System-Pakete & Python-Bibliotheken in EINEM Rutsch installieren + Aufräumen
 # ------------------------------------------
-# Installiert Python 3, requests, inotify, ExifTool, Midnight Commander (mc) 
-# sowie ca-certificates direkt über den Paketmanager.
+# Installiert Python 3, requests, ExifTool, Midnight Commander (mc) sowie
+# ca-certificates direkt über den Paketmanager. inotify kommt bewusst NICHT
+# von hier (siehe STUFE 1 / LAYER 4), sondern per pip aus dem Builder - das
+# apk-Paket py3-inotify packt ein anderes, unpassendes Projekt (s.o.). Bewusst
+# OHNE pip/setuptools - die werden nur im Builder (STUFE 1) gebraucht.
 RUN apk add --no-cache \
     python3 \
     py3-requests \
-    py3-inotify \
     libcom_err \
     bash \
     mc \
@@ -39,12 +74,21 @@ ENV HOME=/app
 RUN mkdir -p /videos /log /etc/yt-upload/conf.d && chmod 777 /videos /log
 
 # ------------------------------------------
-# LAYER 4: Lokale Skripte & Configs kopieren
+# LAYER 4: Lokale Skripte, Package & Configs kopieren
 # ------------------------------------------
+# yt_upload-Package + Entry-Point kommen fertig installiert aus dem Builder
+# (STUFE 1) - kein pip-Aufruf mehr in dieser Stage. PYTHONPATH macht das
+# Package unabhängig von distro-spezifischen site-packages-Konventionen
+# auffindbar (siehe Debian-Dockerfile für die ausführliche Begründung).
 COPY bashrc /etc/global.bashrc
 COPY --chmod=755 get_token.py /usr/local/bin/get_token
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY --chmod=755 yt-upload.py /usr/local/bin/yt-upload
+COPY --from=builder /install/bin/yt-upload /usr/local/bin/yt-upload
+COPY --from=builder /install/yt_upload /usr/local/lib/yt-upload/yt_upload
+COPY --from=builder /install/yt_upload-*.dist-info /usr/local/lib/yt-upload/yt_upload.dist-info
+COPY --from=builder /install/inotify /usr/local/lib/yt-upload/inotify
+COPY --from=builder /install/inotify-*.dist-info /usr/local/lib/yt-upload/inotify.dist-info
+ENV PYTHONPATH=/usr/local/lib/yt-upload
 COPY upload.conf.example /etc/yt-upload/upload.conf
 
 # ------------------------------------------
@@ -54,12 +98,7 @@ RUN ln -s /etc/global.bashrc /tmp/.bashrc \
     && ln -s /etc/global.bashrc /app/.bashrc
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD sh -c '\
-    if [ -f /app/yt-upload ]; then \
-      exec /app/yt-upload --healthcheck; \
-    else \
-      exec /usr/local/bin/yt-upload --healthcheck; \
-    fi'
+  CMD ["/usr/local/bin/yt-upload", "--healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 

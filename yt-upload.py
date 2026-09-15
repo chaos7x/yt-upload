@@ -27,19 +27,25 @@ SYSTEM-VORAUSSETZUNGEN:
 """
 
 __title__ = "YouTube Video Uploader & CLI-Uploader"
-__version__ = "1.2.1"
 
 import argparse
 import configparser
+import contextlib
 import glob
 import hashlib
 import json
 import logging
-from logging.handlers import RotatingFileHandler
 import os
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
+import time
+import unicodedata
+import webbrowser
+from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 
 try:
     import fcntl
@@ -47,13 +53,10 @@ try:
 except ImportError:
     # fcntl ist nur auf Unix verfügbar; auf anderen Plattformen läuft das Skript ohne Lockfile-Schutz weiter.
     HAS_FCNTL = False
-import sys
-import tempfile
-import time
-import unicodedata
-import webbrowser
+
 import requests
-from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------------------
 # Debug-Modus über Umgebungsvariable 'DEBUG' setzen
@@ -94,6 +97,11 @@ WATCH_MASK = (
 CONF_PATH = os.environ.get('CONFIG_FILE', '/etc/yt-upload/upload.conf')
 CONF_D_DIR = os.environ.get('CONF_D_DIR', os.path.join(os.path.dirname(CONF_PATH), 'conf.d'))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# TODO: Nach dem Package-Split (yt_upload.main:main) auf
+# importlib.metadata.version("yt-upload") umstellen, statt hier hartkodiert
+# zu pflegen - siehe Kommentar in pyproject.toml.
+__version__ = "1.2.2"
 
 # Dynamic Path Detection: Docker Container Mounts (/videos) vs. Bare-Metal Host
 IN_DIR = os.environ.get('IN_DIR', "/videos/in" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "in"))
@@ -267,7 +275,7 @@ def load_configuration(log_changes=False):
     new_hash = hasher.hexdigest()
     if log_changes and CURRENT_CONFIG_HASH and new_hash != CURRENT_CONFIG_HASH:
         files_str = ", ".join(file_list_names) if file_list_names else "conf.d"
-        logging.info(f"🔄 Konfigurationsänderung erkannt (geändert: {files_str}). Synchronisiere...")
+        logger.info(f"🔄 Konfigurationsänderung erkannt (geändert: {files_str}). Synchronisiere...")
     CURRENT_CONFIG_HASH = new_hash
 
     # --- Step 1: Config-Dateien verarbeiten ---
@@ -346,7 +354,7 @@ def load_configuration(log_changes=False):
             if cleaned:
                 combined_blacklist.add(cleaned)
 
-    DESCRIPTION_BLACKLIST = sorted(list(combined_blacklist))
+    DESCRIPTION_BLACKLIST = sorted(combined_blacklist)
 
     ALLOW_EMBEDDING = allow_embedding
     AUTO_GENERATE_THUMBNAIL = auto_generate_thumbnail
@@ -377,9 +385,9 @@ def get_access_token(cred_file=None, client_secrets_file=None):
         if current_mode & 0o077:
             try:
                 os.chmod(target_cred, 0o600)
-                logging.warning(f"Credentials-Datei {target_cred} war zu offen berechtigt, auf 600 korrigiert.")
+                logger.warning(f"Credentials-Datei {target_cred} war zu offen berechtigt, auf 600 korrigiert.")
             except OSError as chmod_err:
-                logging.warning(f"Credentials-Datei {target_cred} ist zu offen berechtigt und konnte nicht korrigiert werden: {chmod_err}")
+                logger.warning(f"Credentials-Datei {target_cred} ist zu offen berechtigt und konnte nicht korrigiert werden: {chmod_err}")
     except OSError:
         pass
 
@@ -471,7 +479,7 @@ def load_segment_progress(work_path):
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError) as e:
-        logging.warning(f"Konnte Progress-Datei {progress_path} nicht lesen, starte ohne Fortschritt: {e}")
+        logger.warning(f"Konnte Progress-Datei {progress_path} nicht lesen, starte ohne Fortschritt: {e}")
         return {}
 
 
@@ -482,7 +490,7 @@ def save_segment_progress(work_path, progress):
         with open(progress_path, "w", encoding="utf-8") as f:
             json.dump(progress, f)
     except OSError as e:
-        logging.warning(f"Konnte Progress-Datei {progress_path} nicht schreiben: {e}")
+        logger.warning(f"Konnte Progress-Datei {progress_path} nicht schreiben: {e}")
 
 
 def clear_segment_progress(work_path):
@@ -492,7 +500,7 @@ def clear_segment_progress(work_path):
         if os.path.isfile(progress_path):
             os.unlink(progress_path)
     except OSError as e:
-        logging.warning(f"Konnte Progress-Datei {progress_path} nicht löschen: {e}")
+        logger.warning(f"Konnte Progress-Datei {progress_path} nicht löschen: {e}")
 
 
 def cleanup_work_files(work_paths, is_error=False):
@@ -504,7 +512,7 @@ def cleanup_work_files(work_paths, is_error=False):
             if os.path.isfile(item_path) or os.path.islink(item_path):
                 os.unlink(item_path)
         except OSError as e:
-            logging.error(f"Fehler beim Löschen von {item_path}: {e}")
+            logger.error(f"Fehler beim Löschen von {item_path}: {e}")
 
 
 def cleanup_generated_thumbnail(thumb_path):
@@ -522,7 +530,7 @@ def cleanup_generated_thumbnail(thumb_path):
         if os.path.isfile(candidate):
             os.unlink(candidate)
     except OSError as e:
-        logging.warning(f"Generiertes Thumbnail kann nicht gelöscht werden ({candidate}): {e}")
+        logger.warning(f"Generiertes Thumbnail kann nicht gelöscht werden ({candidate}): {e}")
 
 
 def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
@@ -539,23 +547,23 @@ def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
         try:
             current_size = os.path.getsize(file_path)
         except OSError as e:
-            logging.error(f"Fehler bei Dateigrößenprüfung von {file_path}: {e}")
+            logger.error(f"Fehler bei Dateigrößenprüfung von {file_path}: {e}")
             return False
 
         if current_size == 0:
-            logging.warning(f"Datei ist noch 0 Bytes groß, warte... ({check_num + 1}/{max_checks})")
+            logger.warning(f"Datei ist noch 0 Bytes groß, warte... ({check_num + 1}/{max_checks})")
             time.sleep(wait_interval)
             continue
 
         if last_size != -1 and current_size == last_size:
             break
         elif last_size != -1:
-            logging.info(f"Datei wächst noch ({current_size / (1024*1024):.1f} MB)... warte weiter.")
+            logger.info(f"Datei wächst noch ({current_size / (1024*1024):.1f} MB)... warte weiter.")
 
         last_size = current_size
         time.sleep(wait_interval)
     else:
-        logging.warning(f"Datei wird nach {max_checks * wait_interval}s noch geschrieben: {os.path.basename(file_path)}")
+        logger.warning(f"Datei wird nach {max_checks * wait_interval}s noch geschrieben: {os.path.basename(file_path)}")
         return False
 
     # Integritätsprüfung via ffprobe durchführen
@@ -566,9 +574,9 @@ def is_file_ready_and_valid(file_path, wait_interval=3, max_checks=10):
         "-of", "default=noprint_wrappers=1:nokey=1",
         file_path
     ]
-    res = subprocess.run(cmd_check, capture_output=True, text=True)
+    res = subprocess.run(cmd_check, capture_output=True, text=True, check=False)
     if res.returncode != 0:
-        logging.warning(f"FFprobe-Check fehlgeschlagen (evtl. unvollständig oder ungültiges Format): {os.path.basename(file_path)}")
+        logger.warning(f"FFprobe-Check fehlgeschlagen (evtl. unvollständig oder ungültiges Format): {os.path.basename(file_path)}")
         return False
 
     return True
@@ -620,16 +628,16 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
     # Prüfe zuerst, ob bereits verarbeitbare Dateien im Ordner liegen
     existing = find_existing_video(target_dir)
     if existing:
-        logging.info(f"Bestehende Datei gefunden: {existing}")
+        logger.info(f"Bestehende Datei gefunden: {existing}")
         return existing
 
-    logging.info(f"Warte via inotify auf neue Dateien in {target_dir}...")
+    logger.info(f"Warte via inotify auf neue Dateien in {target_dir}...")
     valid_exts = (".mp4", ".mkv", ".mov", ".m4v")
 
     # Fallback-Schleife falls inotify nicht im System geladen ist
     if not HAS_INOTIFY or inotify_adapter is None:
         if not HAS_INOTIFY:
-            logging.warning("inotify-Modul nicht verfügbar, nutze Polling-Fallback.")
+            logger.warning("inotify-Modul nicht verfügbar, nutze Polling-Fallback.")
         while True:
             time.sleep(10)
             load_configuration(log_changes=True)
@@ -653,7 +661,7 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
                 if event is None:
                     existing = find_existing_video(target_dir)
                     if existing:
-                        logging.info(f"Datei via Fallback-Timer erkannt: {existing}")
+                        logger.info(f"Datei via Fallback-Timer erkannt: {existing}")
                         return existing
                     continue
 
@@ -666,14 +674,13 @@ def wait_for_input(target_dir=IN_DIR, inotify_adapter=None):
                     continue
 
                 # Reagiere auf abgeschlossene Schreibvorgänge oder Verschiebungen
-                if any(t in type_names for t in ["IN_CLOSE_WRITE", "IN_MOVED_TO"]):
-                    if filename.lower().endswith(valid_exts):
-                        full_path = os.path.join(path, filename)
-                        if os.path.isfile(full_path):
-                            logging.info(f"Datei erfolgreich via inotify erkannt: {full_path}")
-                            return full_path
-        except Exception as e:
-            logging.error(f"Fehler beim Inotify-Observer: {e}")
+                if any(t in type_names for t in ["IN_CLOSE_WRITE", "IN_MOVED_TO"]) and filename.lower().endswith(valid_exts):
+                    full_path = os.path.join(path, filename)
+                    if os.path.isfile(full_path):
+                        logger.info(f"Datei erfolgreich via inotify erkannt: {full_path}")
+                        return full_path
+        except Exception as e:  # noqa: BLE001 - Sicherheitsnetz für den gesamten Inotify-Loop; die inotify-Bibliothek kann diverse, nicht klar typisierte Fehler werfen
+            logger.error(f"Fehler beim Inotify-Observer: {e}")
             time.sleep(5)
             existing = find_existing_video(target_dir)
             if existing:
@@ -750,12 +757,12 @@ def normalize_recording_date(value):
     value = str(value).strip()
 
     if re.fullmatch(r"\d{8}", value):
-        parsed = datetime.strptime(value, "%Y%m%d")
-        return parsed.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        parsed = datetime.strptime(value, "%Y%m%d").replace(tzinfo=timezone.utc)
+        return parsed.isoformat().replace("+00:00", "Z")
 
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-        parsed = datetime.strptime(value, "%Y-%m-%d")
-        return parsed.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        parsed = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return parsed.isoformat().replace("+00:00", "Z")
 
     return value
 
@@ -790,11 +797,11 @@ def parse_location(location_str):
         if "altitude" in parts:
             loc["altitude"] = float(parts["altitude"])
         return loc
-    except Exception as e:
+    except (ValueError, KeyError, TypeError) as e:
         # Rohe Koordinaten sind Standortdaten und dürfen laut Logging-Policy nur
         # auf DEBUG-Level erscheinen, nie auf WARNING/INFO oder höher.
-        logging.warning(f"Konnte Location-String nicht parsen: {e}")
-        logging.debug(f"Fehlerhafter Location-String war: '{location_str}'")
+        logger.warning(f"Konnte Location-String nicht parsen: {e}")
+        logger.debug(f"Fehlerhafter Location-String war: '{location_str}'")
         return None
 
 
@@ -843,8 +850,8 @@ def extract_metadata_and_thumb(file_path):
         metadata["date"] = tags.get("date")
         metadata["artist"] = sanitize_text(tags.get("artist") or tags.get("album_artist"))
 
-    except Exception as e:
-        logging.error(f"Fehler beim Auslesen der Metadaten via FFprobe: {e}")
+    except (subprocess.SubprocessError, OSError, json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.error(f"Fehler beim Auslesen der Metadaten via FFprobe: {e}")
 
     temp_dir = tempfile.gettempdir()
     pid = os.getpid()
@@ -855,18 +862,18 @@ def extract_metadata_and_thumb(file_path):
     # Versuche eingebettete Cover-Bilder zu extrahieren (MKV / MP4 Attachments)
     try:
         cmd_mkv = ["ffmpeg", "-y", "-dump_attachment:t:0", temp_attach, "-i", file_path]
-        subprocess.run(cmd_mkv, capture_output=True, text=True)
+        subprocess.run(cmd_mkv, capture_output=True, text=True, check=False)
 
         if not os.path.exists(temp_attach) or os.path.getsize(temp_attach) == 0:
             cmd_mp4 = [
                 "ffmpeg", "-y", "-i", file_path,
                 "-map", "0:v:m:attached_pic:0?", "-c", "copy", temp_attach
             ]
-            subprocess.run(cmd_mp4, capture_output=True, text=True)
+            subprocess.run(cmd_mp4, capture_output=True, text=True, check=False)
 
         if os.path.exists(temp_attach) and os.path.getsize(temp_attach) > 0:
             cmd_conv = ["ffmpeg", "-y", "-i", temp_attach, "-q:v", "2", thumb_path]
-            subprocess.run(cmd_conv, capture_output=True, text=True)
+            subprocess.run(cmd_conv, capture_output=True, text=True, check=False)
 
         # Fallback: Frame an bestimmter Position im Video als Thumbnail rendern
         if (not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0) and AUTO_GENERATE_THUMBNAIL:
@@ -880,7 +887,7 @@ def extract_metadata_and_thumb(file_path):
                 target_sec = AUTO_THUMB_MIN_SEC + ((AUTO_THUMB_MAX_SEC - AUTO_THUMB_MIN_SEC) // 2)
                 seek_sec = min(target_sec, max(1, duration - 1))
 
-            logging.info(f"Generiere Auto-Thumbnail bei Sekunde {seek_sec} (Video-Dauer: {duration}s)...")
+            logger.info(f"Generiere Auto-Thumbnail bei Sekunde {seek_sec} (Video-Dauer: {duration}s)...")
 
             cmd_frame = [
                 "ffmpeg", "-y",
@@ -890,10 +897,10 @@ def extract_metadata_and_thumb(file_path):
                 "-q:v", "2",
                 thumb_path
             ]
-            subprocess.run(cmd_frame, capture_output=True, text=True)
+            subprocess.run(cmd_frame, capture_output=True, text=True, check=False)
 
             if not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0:
-                logging.warning("Seek fehlgeschlagen, versuche ersten Keyframe zu greifen...")
+                logger.warning("Seek fehlgeschlagen, versuche ersten Keyframe zu greifen...")
                 cmd_keyframe = [
                     "ffmpeg", "-y",
                     "-discard", "nokey",
@@ -902,23 +909,21 @@ def extract_metadata_and_thumb(file_path):
                     "-q:v", "2",
                     thumb_path
                 ]
-                subprocess.run(cmd_keyframe, capture_output=True, text=True)
+                subprocess.run(cmd_keyframe, capture_output=True, text=True, check=False)
 
         if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
             metadata["thumb_path"] = thumb_path
-            logging.info(f"Thumbnail erfolgreich zugewiesen: {thumb_path}")
+            logger.info(f"Thumbnail erfolgreich zugewiesen: {thumb_path}")
         else:
-            logging.warning("Kein Thumbnail generiert/gefunden. YouTube wird ein automatisches Frame wählen.")
+            logger.warning("Kein Thumbnail generiert/gefunden. YouTube wird ein automatisches Frame wählen.")
 
-    except Exception as e:
-        logging.warning(f"Fehler bei der Thumbnail-Extraktion: {e}")
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.warning(f"Fehler bei der Thumbnail-Extraktion: {e}")
     finally:
         # Aufräumen der temporären Attachment-Datei
         if os.path.exists(temp_attach):
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(temp_attach)
-            except OSError:
-                pass
 
     return metadata
 
@@ -966,16 +971,16 @@ def split_video_if_needed(work_path):
         ]
         res = subprocess.run(cmd_probe, capture_output=True, text=True, check=True)
         duration_sec = float(res.stdout.strip())
-    except Exception as e:
-        logging.error(f"Fehler bei Dauer-Ermittlung: {e}")
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
+        logger.error(f"Fehler bei Dauer-Ermittlung: {e}")
         return [work_path]
 
-    logging.info(f"Videolänge: {int(duration_sec)} Sekunden ({duration_sec / 3600:.2f} Stunden)")
+    logger.info(f"Videolänge: {int(duration_sec)} Sekunden ({duration_sec / 3600:.2f} Stunden)")
 
     if duration_sec <= SEGMENT_TIME_SEC:
         return [work_path]
 
-    logging.info("Video überschreitet 10 Stunden. Starte FFmpeg-Splitting...")
+    logger.info("Video überschreitet 10 Stunden. Starte FFmpeg-Splitting...")
     filename = os.path.basename(work_path)
     base_name, ext = os.path.splitext(filename)
     segment_pattern = os.path.join(WORK_DIR, f"{base_name}_part%02d{ext}")
@@ -1000,7 +1005,7 @@ def split_video_if_needed(work_path):
     try:
         subprocess.run(cmd_split, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as e:
-        logging.error(f"FFmpeg Splitting fehlgeschlagen: {e.stderr}")
+        logger.error(f"FFmpeg Splitting fehlgeschlagen: {e.stderr}")
         raise
 
     # Generierte Segmente einsammeln
@@ -1022,7 +1027,6 @@ def split_video_if_needed(work_path):
 
 class PermanentUploadError(RuntimeError):
     """Wird bei dauerhaften (nicht behebbaren) API-Fehlern ausgelöst, um sinnloses Retrying zu vermeiden."""
-    pass
 
 
 # ==============================================================================
@@ -1046,8 +1050,8 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
             new_token = get_access_token(cred_file, client_secrets_file)
             headers["Authorization"] = f"Bearer {new_token}"
             return True
-        except Exception as e:
-            logging.warning(f"Token-Refresh für Playlist-Zuweisung fehlgeschlagen: {e}")
+        except (OSError, ValueError, KeyError, requests.exceptions.RequestException) as e:
+            logger.warning(f"Token-Refresh für Playlist-Zuweisung fehlgeschlagen: {e}")
             return False
 
     try:
@@ -1057,18 +1061,18 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
 
         # Durchsuche bestehende Playlists des Nutzers
         while True:
-            list_url = f"https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50"
+            list_url = "https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50"
             if next_page:
                 list_url += f"&pageToken={next_page}"
 
             res = requests.get(list_url, headers=headers, timeout=30)
 
             if res.status_code in (401, 403) and not auth_retry_used:
-                logging.warning("Playlist-Abruf: Token abgelaufen, erneuere und versuche erneut...")
+                logger.warning("Playlist-Abruf: Token abgelaufen, erneuere und versuche erneut...")
                 auth_retry_used = True
                 if _refresh_token_if_possible():
                     continue
-                logging.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {res.text}")
+                logger.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {res.text}")
                 break
 
             if res.status_code == 200:
@@ -1083,7 +1087,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                 if not next_page:
                     break
             else:
-                logging.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {res.text}")
+                logger.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {res.text}")
                 break
 
         # Falls Playlist nicht existiert, erstelle sie neu
@@ -1095,14 +1099,14 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
             }
             create_res = requests.post(create_url, headers=headers, json=create_body, timeout=30)
             if create_res.status_code in (401, 403) and not auth_retry_used:
-                logging.warning("Playlist-Erstellung: Token abgelaufen, erneuere und versuche erneut...")
+                logger.warning("Playlist-Erstellung: Token abgelaufen, erneuere und versuche erneut...")
                 auth_retry_used = True
                 if _refresh_token_if_possible():
                     create_res = requests.post(create_url, headers=headers, json=create_body, timeout=30)
             if create_res.status_code in (200, 201):
                 playlist_id = create_res.json().get("id")
             elif create_res.status_code not in (200, 201):
-                logging.warning(f"Konnte Playlist nicht erstellen ({create_res.status_code}): {create_res.text}")
+                logger.warning(f"Konnte Playlist nicht erstellen ({create_res.status_code}): {create_res.text}")
 
         # Video der Playlist zuweisen
         if playlist_id:
@@ -1121,28 +1125,28 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=VIDEO_P
                 item_res = requests.post(item_url, headers=headers, json=item_body, timeout=30)
 
                 if item_res.status_code in (401, 403) and not auth_retry_used:
-                    logging.warning("Playlist-Zuweisung: Token abgelaufen, erneuere und versuche erneut...")
+                    logger.warning("Playlist-Zuweisung: Token abgelaufen, erneuere und versuche erneut...")
                     auth_retry_used = True
                     if _refresh_token_if_possible():
                         continue
 
                 if item_res.status_code in (200, 201):
-                    logging.info(f"Video {video_id} erfolgreich zur Playlist '{playlist_name}' hinzugefügt.")
+                    logger.info(f"Video {video_id} erfolgreich zur Playlist '{playlist_name}' hinzugefügt.")
                     return True
 
                 if item_res.status_code in (409, 500, 502, 503, 504) and attempt < max_retries:
-                    logging.warning(
+                    logger.warning(
                         f"YouTube API meldet {item_res.status_code} beim Playlist-Assignment. "
                         f"Retry {attempt}/{max_retries} in {retry_delay}s..."
                     )
                     time.sleep(retry_delay)
                     retry_delay *= 2
                 else:
-                    logging.warning(f"Video konnte Playlist nicht hinzugefügt werden: {item_res.text}")
+                    logger.warning(f"Video konnte Playlist nicht hinzugefügt werden: {item_res.text}")
                     break
 
-    except Exception as e:
-        logging.error(f"Fehler bei Playlist-API: {e}")
+    except (requests.exceptions.RequestException, ValueError, KeyError, OSError) as e:
+        logger.error(f"Fehler bei Playlist-API: {e}")
     return False
 
 
@@ -1181,10 +1185,10 @@ def upload_single_video(
         desc = desc[:5000]
 
     if publish_at and privacy != "private":
-        logging.info(f"Status wurde für geplanten Upload von '{privacy}' auf 'private' korrigiert.")
+        logger.info(f"Status wurde für geplanten Upload von '{privacy}' auf 'private' korrigiert.")
         privacy = "private"
 
-    logging.info(f"Lade hoch via native HTTP REST API ({privacy}): {os.path.basename(file_path)}")
+    logger.info(f"Lade hoch via native HTTP REST API ({privacy}): {os.path.basename(file_path)}")
 
     file_size = os.path.getsize(file_path)
     access_token = get_access_token(cred_file, client_secrets_file)
@@ -1194,7 +1198,7 @@ def upload_single_video(
     # Ausrichtung der Chunksize an die von YouTube vorgeschriebene 256-KiB-Grenze
     if chunksize % CHUNK_UNIT_BYTES != 0:
         adjusted_chunksize = max(CHUNK_UNIT_BYTES, (chunksize // CHUNK_UNIT_BYTES) * CHUNK_UNIT_BYTES)
-        logging.info(f"Chunksize angepasst auf Vielfaches von 256 KiB: {chunksize} -> {adjusted_chunksize} Bytes")
+        logger.info(f"Chunksize angepasst auf Vielfaches von 256 KiB: {chunksize} -> {adjusted_chunksize} Bytes")
         chunksize = adjusted_chunksize
 
     # Säuberung und Kürzung der Tags
@@ -1259,7 +1263,7 @@ def upload_single_video(
         metadata_body["recordingDetails"] = metadata_body.get("recordingDetails", {})
         metadata_body["recordingDetails"]["location"] = parsed_loc
 
-    logging.debug(f"PAYLOAD DEBUG: {json.dumps(metadata_body, ensure_ascii=False)}")
+    logger.debug(f"PAYLOAD DEBUG: {json.dumps(metadata_body, ensure_ascii=False)}")
 
     parts = "snippet,status"
     if "recordingDetails" in metadata_body:
@@ -1274,7 +1278,7 @@ def upload_single_video(
         "X-Upload-Content-Type": "video/*"
     }
 
-    logging.info("Initialisiere Resumable Upload Session...")
+    logger.info("Initialisiere Resumable Upload Session...")
 
     init_res = None
     init_max_retries = 3
@@ -1282,7 +1286,7 @@ def upload_single_video(
         try:
             init_res = session.post(init_url, headers=init_headers, json=metadata_body, timeout=60)
         except requests.exceptions.RequestException as e:
-            logging.warning(f"Netzwerkfehler bei Session-Init (Versuch {init_attempt}/{init_max_retries}): {e}")
+            logger.warning(f"Netzwerkfehler bei Session-Init (Versuch {init_attempt}/{init_max_retries}): {e}")
             if init_attempt < init_max_retries:
                 time.sleep(2 ** init_attempt)
                 continue
@@ -1299,7 +1303,7 @@ def upload_single_video(
 
         # Transiente Server-Fehler: mit Backoff erneut versuchen
         if init_res.status_code in (500, 502, 503, 504) and init_attempt < init_max_retries:
-            logging.warning(
+            logger.warning(
                 f"YouTube API meldet {init_res.status_code} bei Session-Init. "
                 f"Retry {init_attempt}/{init_max_retries} in {2 ** init_attempt}s..."
             )
@@ -1312,7 +1316,7 @@ def upload_single_video(
     if not upload_url:
         raise RuntimeError("Keine Upload-Location im Header erhalten.")
 
-    logging.info(f"Starte Chunk-Upload ({file_size / (1024 * 1024):.2f} MB) mit Chunksize {chunksize / (1024 * 1024):.1f} MB...")
+    logger.info(f"Starte Chunk-Upload ({file_size / (1024 * 1024):.2f} MB) mit Chunksize {chunksize / (1024 * 1024):.1f} MB...")
 
     max_retries = 5
     video_id = None
@@ -1345,7 +1349,7 @@ def upload_single_video(
                         uploaded_bytes = file_size
                         chunk_success = True
                         write_heartbeat()
-                        logging.info(f"Upload ERFOLGREICH abgeschlossen! Video-ID: {video_id}")
+                        logger.info(f"Upload ERFOLGREICH abgeschlossen! Video-ID: {video_id}")
                         break
 
                     # Status 308: Incomplete, Chunk erfolgreich empfangen (mit robuster Offset-Auswertung)
@@ -1361,10 +1365,10 @@ def upload_single_video(
 
                         if uploaded_bytes < file_size and uploaded_bytes % CHUNK_UNIT_BYTES != 0:
                             uploaded_bytes = (uploaded_bytes // CHUNK_UNIT_BYTES) * CHUNK_UNIT_BYTES
-                            logging.warning(f"Offset korrigiert auf 256-KiB-Grenze: {uploaded_bytes} Bytes")
+                            logger.warning(f"Offset korrigiert auf 256-KiB-Grenze: {uploaded_bytes} Bytes")
 
                         pct = (uploaded_bytes / file_size) * 100
-                        logging.info(f"Fortschritt: {uploaded_bytes / (1024*1024):.1f} / {file_size / (1024*1024):.1f} MB ({pct:.1f}%)")
+                        logger.info(f"Fortschritt: {uploaded_bytes / (1024*1024):.1f} / {file_size / (1024*1024):.1f} MB ({pct:.1f}%)")
                         chunk_success = True
                         write_heartbeat()
                         break
@@ -1377,7 +1381,7 @@ def upload_single_video(
 
                     # Alle übrigen Status-Codes: immer loggen, damit Fehler nicht stillschweigend verschwinden
                     else:
-                        logging.error(
+                        logger.error(
                             f"Unerwarteter Status {put_res.status_code} beim Chunk-Upload "
                             f"(Versuch {attempt}/{max_retries}): {put_res.text[:500]}"
                         )
@@ -1392,8 +1396,8 @@ def upload_single_video(
                 except PermanentUploadError:
                     raise  # nicht abfangen/retryen - direkt an den Aufrufer durchreichen
 
-                except Exception as e:
-                    logging.warning(f"Fehler bei Chunk-Upload (Versuch {attempt}/{max_retries}): {e}")
+                except Exception as e:  # noqa: BLE001 - fängt hier bewusst auch selbst geworfene RuntimeErrors als Retry-Signal ab, nicht nur echte Netzwerkfehler
+                    logger.warning(f"Fehler bei Chunk-Upload (Versuch {attempt}/{max_retries}): {e}")
                     time.sleep(2 ** attempt)
 
             if not chunk_success:
@@ -1404,14 +1408,14 @@ def upload_single_video(
     # (~1h) überschreiten. Token hier proaktiv erneuern statt erst bei 401 zu reagieren.
     try:
         access_token = get_access_token(cred_file, client_secrets_file)
-    except Exception as refresh_err:
-        logging.warning(f"Token-Refresh vor Post-Upload-Schritten fehlgeschlagen, verwende bestehenden Token: {refresh_err}")
+    except (OSError, ValueError, KeyError, requests.exceptions.RequestException) as refresh_err:
+        logger.warning(f"Token-Refresh vor Post-Upload-Schritten fehlgeschlagen, verwende bestehenden Token: {refresh_err}")
 
     try:
         if video_id:
             if thumb_path and os.path.exists(thumb_path):
                 try:
-                    logging.info(f"Lade benutzerdefiniertes Thumbnail hoch: {thumb_path}")
+                    logger.info(f"Lade benutzerdefiniertes Thumbnail hoch: {thumb_path}")
                     thumb_url = f"https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={video_id}"
                     with open(thumb_path, "rb") as tf:
                         thumb_bytes = tf.read()
@@ -1427,17 +1431,17 @@ def upload_single_video(
                             timeout=60
                         )
                         if t_res.status_code in (200, 201):
-                            logging.info("Thumbnail erfolgreich gesetzt.")
+                            logger.info("Thumbnail erfolgreich gesetzt.")
                             break
                         elif t_res.status_code in (401, 403) and thumb_attempt == 1:
-                            logging.warning("Thumbnail-Upload: Token abgelaufen, erneuere und versuche erneut...")
+                            logger.warning("Thumbnail-Upload: Token abgelaufen, erneuere und versuche erneut...")
                             access_token = get_access_token(cred_file, client_secrets_file)
                             continue
                         else:
-                            logging.warning(f"Thumbnail-Upload fehlgeschlagen ({t_res.status_code}): {t_res.text}")
+                            logger.warning(f"Thumbnail-Upload fehlgeschlagen ({t_res.status_code}): {t_res.text}")
                             break
-                except Exception as te:
-                    logging.warning(f"Fehler beim Thumbnail-Setzen: {te}")
+                except (OSError, ValueError, KeyError, requests.exceptions.RequestException) as te:
+                    logger.warning(f"Fehler beim Thumbnail-Setzen: {te}")
 
             if playlist_name:
                 add_video_to_playlist(
@@ -1447,7 +1451,7 @@ def upload_single_video(
 
             if open_link:
                 v_url = f"https://www.youtube.com/watch?v={video_id}"
-                logging.info(f"Öffne Browser-Link: {v_url}")
+                logger.info(f"Öffne Browser-Link: {v_url}")
                 webbrowser.open(v_url)
     finally:
         cleanup_generated_thumbnail(thumb_path)
@@ -1469,17 +1473,17 @@ def process_single_file(file_path, args=None):
     6. Verschieben nach DONE (oder CORRUPT bei Fehler)
     """
     filename = os.path.basename(file_path)
-    logging.info(f"--- VERARBEITE DATEI: {filename} ---")
+    logger.info(f"--- VERARBEITE DATEI: {filename} ---")
 
     # Vorab-Prüfung auf Integrität der Quelldatei
     if not is_file_ready_and_valid(file_path):
-        logging.error(f"Datei unvollständig oder ungültig: {filename}. Verschiebe nach CORRUPT...")
+        logger.error(f"Datei unvollständig oder ungültig: {filename}. Verschiebe nach CORRUPT...")
         target_corrupt = resolve_target_path(CORRUPT_DIR, filename)
         shutil.move(file_path, target_corrupt)
         return
 
     work_path = resolve_target_path(WORK_DIR, filename)
-    logging.info(f"Verschiebe nach WORK: {work_path}")
+    logger.info(f"Verschiebe nach WORK: {work_path}")
     shutil.move(file_path, work_path)
 
     meta = extract_metadata_and_thumb(work_path)
@@ -1527,14 +1531,14 @@ def process_single_file(file_path, args=None):
     # Fortschritt aus einem evtl. vorherigen fehlgeschlagenen Lauf laden (Segment-Dateiname -> Video-ID)
     progress = load_segment_progress(work_path)
     if progress:
-        logging.info(f"Bestehender Fortschritt gefunden: {len(progress)} Segment(e) bereits hochgeladen, werden übersprungen.")
+        logger.info(f"Bestehender Fortschritt gefunden: {len(progress)} Segment(e) bereits hochgeladen, werden übersprungen.")
 
     # Segmente nacheinander hochladen
     for idx, seg in enumerate(segments):
         seg_key = os.path.basename(seg)
 
         if seg_key in progress:
-            logging.info(f"Segment {seg_key} bereits hochgeladen (Video-ID {progress[seg_key]}), überspringe.")
+            logger.info(f"Segment {seg_key} bereits hochgeladen (Video-ID {progress[seg_key]}), überspringe.")
             continue
 
         part_title = title_base
@@ -1566,15 +1570,15 @@ def process_single_file(file_path, args=None):
             # Fortschritt sofort persistieren, damit bei einem späteren Fehler nichts verloren geht
             progress[seg_key] = video_id
             save_segment_progress(work_path, progress)
-        except Exception as e:
-            logging.error(f"Upload-Fehler bei Segment {seg}: {e}")
+        except Exception as e:  # noqa: BLE001 - Top-Level-Boundary für den gesamten Segment-Upload; Fehler aus Netzwerk, Dateisystem und API-Logik sollen hier gleichermaßen zu einem sauberen Retry/Corrupt-Handling führen statt den Daemon abstürzen zu lassen
+            logger.error(f"Upload-Fehler bei Segment {seg}: {e}")
 
             if progress:
                 # Mind. ein Segment wurde bereits erfolgreich hochgeladen: NICHT nach CORRUPT verschieben,
                 # sonst gehen Original + Fortschritt-Zuordnung verloren und bereits hochgeladene Segmente
                 # würden bei einem erneuten Lauf ein zweites Mal hochgeladen.
                 target_retry = resolve_target_path(RETRY_DIR, filename)
-                logging.warning(
+                logger.warning(
                     f"{len(progress)} von {len(segments)} Segment(en) bereits erfolgreich hochgeladen. "
                     f"Verschiebe Original nach RETRY statt CORRUPT, Fortschritt bleibt erhalten: {target_retry}"
                 )
@@ -1591,7 +1595,7 @@ def process_single_file(file_path, args=None):
 
     # Bei Erfolg ins DONE-Verzeichnis verschieben
     target_done = resolve_target_path(DONE_DIR, filename)
-    logging.info(f"Verarbeitung erfolgreich. Verschiebe Original nach DONE: {target_done}")
+    logger.info(f"Verarbeitung erfolgreich. Verschiebe Original nach DONE: {target_done}")
     shutil.move(work_path, target_done)
     cleanup_work_files(segments)
     clear_segment_progress(work_path)
@@ -1615,7 +1619,7 @@ def write_heartbeat():
         with open(HEALTH_FILE, "w") as f:
             f.write(str(time.time()))
     except OSError as e:
-        logging.debug(f"Konnte Heartbeat-Datei {HEALTH_FILE} nicht schreiben: {e}")
+        logger.debug(f"Konnte Heartbeat-Datei {HEALTH_FILE} nicht schreiben: {e}")
 
 
 def run_healthcheck() -> int:
@@ -1697,18 +1701,21 @@ def acquire_instance_lock():
     global _lock_file_handle
 
     if not HAS_FCNTL:
-        logging.warning("fcntl nicht verfügbar (kein Unix-System) - Lockfile-Schutz übersprungen.")
+        logger.warning("fcntl nicht verfügbar (kein Unix-System) - Lockfile-Schutz übersprungen.")
         return True
 
     lock_path = os.path.join(tempfile.gettempdir(), "yt-upload.lock")
     try:
-        _lock_file_handle = open(lock_path, "w")
+        # Handle bleibt bewusst für die gesamte Prozesslaufzeit offen, damit der
+        # flock() gehalten wird; ein `with`-Block würde ihn sofort wieder
+        # schließen und den Lock damit freigeben.
+        _lock_file_handle = open(lock_path, "w")  # noqa: SIM115
         fcntl.flock(_lock_file_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         _lock_file_handle.write(str(os.getpid()))
         _lock_file_handle.flush()
         return True
     except (OSError, BlockingIOError):
-        logging.error(
+        logger.error(
             f"Es läuft bereits eine andere Instanz von {__title__} (Lock: {lock_path}). Breche ab."
         )
         return False
@@ -1775,13 +1782,13 @@ def main():
         logging.getLogger(noisy_logger_name).setLevel(logging.WARNING)
 
     if trigger_reason is not None and file_log_error:
-        logging.warning(f"Logdatei {LOG_FILE} nicht beschreibbar, verwende nur stdout: {file_log_error}")
+        logger.warning(f"Logdatei {LOG_FILE} nicht beschreibbar, verwende nur stdout: {file_log_error}")
     elif trigger_reason is not None:
-        logging.info(f"Datei-Logging nach {LOG_FILE} aktiv ({trigger_reason}).")
+        logger.info(f"Datei-Logging nach {LOG_FILE} aktiv ({trigger_reason}).")
     else:
-        logging.info("Kein Syslog-Daemon/-Log-Verzeichnis/-Config erkannt - Logging nur nach stdout (journald/docker logs).")
+        logger.info("Kein Syslog-Daemon/-Log-Verzeichnis/-Config erkannt - Logging nur nach stdout (journald/docker logs).")
 
-    logging.info(f"=== {__title__} v{__version__} gestartet ===")
+    logger.info(f"=== {__title__} v{__version__} gestartet ===")
 
     if not acquire_instance_lock():
         sys.exit(1)
@@ -1789,23 +1796,23 @@ def main():
     # Modus 1: Manueller Upload einer angegebenen Datei
     if args.file:
         if not os.path.exists(args.file):
-            logging.error(f"Angegebene Datei existiert nicht: {args.file}")
+            logger.error(f"Angegebene Datei existiert nicht: {args.file}")
             sys.exit(1)
         process_single_file(args.file, args)
 
     # Modus 2: Auto-Batch – verarbeitet alle bereits vorhandenen Dateien nacheinander
     elif args.auto:
-        logging.info(f"Starte einmalige Batch-Verarbeitung in {IN_DIR}...")
+        logger.info(f"Starte einmalige Batch-Verarbeitung in {IN_DIR}...")
         while True:
             file_to_process = find_existing_video(IN_DIR)
             if not file_to_process:
-                logging.info("Keine weiteren Dateien im Eingangsverzeichnis gefunden.")
+                logger.info("Keine weiteren Dateien im Eingangsverzeichnis gefunden.")
                 break
             process_single_file(file_to_process, args=None)
 
     # Modus 3: Dämonen-Modus – Dauerhafte Überwachung mittels Inotify
     elif args.daemon:
-        logging.info("Starte Dämon-Modus...")
+        logger.info("Starte Dämon-Modus...")
         
         current_watched_dir = None
         inotify_adapter = None
@@ -1818,18 +1825,18 @@ def main():
                 # Bei Pfadänderung inotify Tree neu initialisieren
                 if HAS_INOTIFY and current_watched_dir != IN_DIR:
                     try:
-                        logging.info(f"Initialisiere InotifyTree auf: {IN_DIR}")
+                        logger.info(f"Initialisiere InotifyTree auf: {IN_DIR}")
                         inotify_adapter = inotify.adapters.InotifyTree(IN_DIR, mask=WATCH_MASK)
                         current_watched_dir = IN_DIR
-                    except Exception as e:
-                        logging.error(f"Konnte InotifyTree für {IN_DIR} nicht initialisieren: {e}")
+                    except Exception as e:  # noqa: BLE001 - inotify-Bibliothek hat keine eng gefasste Exception-Hierarchie; jeder Fehler hier soll auf den Polling-Fallback zurückfallen statt den Daemon abzubrechen
+                        logger.error(f"Konnte InotifyTree für {IN_DIR} nicht initialisieren: {e}")
                         inotify_adapter = None
 
                 input_file = wait_for_input(IN_DIR, inotify_adapter=inotify_adapter)
                 if input_file:
                     process_single_file(input_file, args=None)
         except KeyboardInterrupt:
-            logging.info("Dämon-Modus beendet.")
+            logger.info("Dämon-Modus beendet.")
 
     else:
         print(f"{__title__} v{__version__}\n")

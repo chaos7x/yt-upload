@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
 set -e
 
-VERSION="dev"
+# Name & Standard-Version aus pyproject.toml lesen, statt sie hier zusätzlich
+# zu pflegen. tomllib ist Standardbibliothek seit Python 3.11 (passt zu
+# requires-python in der pyproject.toml), keine zusätzliche Abhängigkeit.
+read_pyproject_field() {
+    python3 -c "
+import tomllib
+with open('pyproject.toml', 'rb') as f:
+    data = tomllib.load(f)
+print(data['project']['$1'])
+"
+}
+
+if [ ! -f "pyproject.toml" ]; then
+    echo "❌ pyproject.toml nicht gefunden - bitte aus dem Repo-Root ausführen." >&2
+    exit 1
+fi
+
+IMAGE_NAME="$(read_pyproject_field name)"
+VERSION="$(read_pyproject_field version)"
 VARIANT=""
 
 # Bekannte Varianten definieren (für die automatische Erkennung bei nur 1 Argument)
@@ -19,7 +37,7 @@ is_known_variant() {
 
 case "$#" in
     0)
-        # Keine Argumente -> Defaults bleiben (VERSION="dev", VARIANT="")
+        # Keine Argumente -> Defaults bleiben (VERSION aus pyproject.toml, VARIANT="")
         ;;
     1)
         # Ein Argument: Prüfen, ob es eine Variante oder eine Version ist
@@ -40,7 +58,6 @@ case "$#" in
         ;;
 esac
 
-IMAGE_NAME="yt-upload"
 BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
 # Bestimme Dockerfile und Tag dynamisch basierend auf der Variante
