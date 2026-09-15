@@ -72,7 +72,6 @@ def get_valid_category_id(category_input):
     return "22"
 
 
-
 def normalize_recording_date(value):
     """Konvertiert Datumsangaben in das ISO-8601 UTC-Format für die API."""
     if not value:
@@ -108,7 +107,6 @@ def sanitize_text(text):
     return re.sub(r'\s+', ' ', result).strip()
 
 
-
 def parse_location(location_str):
     """Verarbeitet Geokoordinaten aus String-Formaten (latitude=X,longitude=Y)."""
     if not location_str:
@@ -128,7 +126,6 @@ def parse_location(location_str):
         logger.warning(f"Konnte Location-String nicht parsen: {e}")
         logger.debug(f"Fehlerhafter Location-String war: '{location_str}'")
         return None
-
 
 
 def censor_text(text: str) -> str:

@@ -13,6 +13,7 @@ import glob
 import hashlib
 import logging
 import os
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,6 @@ CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', "/app/oauth/youtube-upload
 # desselben Skripts (--healthcheck) prüft nur, ob sie frisch genug ist -
 # ohne Config zu laden oder Verzeichnisse anzulegen, damit der Healthcheck
 # selbst schnell ist und keine Nebenwirkungen hat.
-import tempfile
 HEALTH_FILE = os.environ.get('HEALTH_FILE', os.path.join(tempfile.gettempdir(), "yt-upload.health"))
 # Wie alt die Heartbeat-Datei maximal sein darf, bevor --healthcheck als
 # "unhealthy" (Exit-Code 1) gilt. Grosszügig bemessen, da ein einzelner
@@ -269,6 +269,7 @@ def load_configuration(log_changes=False):
     AUTO_THUMB_MIN_SEC = auto_thumb_min_sec
     AUTO_THUMB_MAX_SEC = auto_thumb_max_sec
     ALLOW_OVERWRITE = allow_overwrite
+
 
 # Initiales Laden beim Scriptstart ausführen
 load_configuration(log_changes=False)

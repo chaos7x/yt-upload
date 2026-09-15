@@ -13,7 +13,11 @@ from yt_upload.fileutils import (
     resolve_target_path,
     save_segment_progress,
 )
-from yt_upload.media import extract_metadata_and_thumb, is_file_ready_and_valid, split_video_if_needed
+from yt_upload.media import (
+    extract_metadata_and_thumb,
+    is_file_ready_and_valid,
+    split_video_if_needed,
+)
 from yt_upload.text_utils import censor_text, sanitize_text
 from yt_upload.youtube_api import upload_single_video
 

@@ -156,7 +156,6 @@ def wait_for_input(target_dir=None, inotify_adapter=None):
                 return existing
 
 
-
 _lock_file_handle = None
 
 
