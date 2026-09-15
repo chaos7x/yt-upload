@@ -4,9 +4,32 @@ version = "1.2.2"
 description = "Automatisierter YouTube Upload Workflow"
 readme = "README.md"
 requires-python = ">=3.11"
+dependencies = [
+    "requests",
+]
+
+[project.optional-dependencies]
+# inotify ist bewusst optional: der Dämon-Modus hat einen try/except-Fallback
+# auf Polling, falls das Modul fehlt (siehe yt_upload/daemon.py, HAS_INOTIFY).
+daemon = ["inotify"]
 
 [project.scripts]
 yt-upload = "yt_upload.main:main"
+
+# Wird sowohl für die Bare-Metal-Installation als auch im Docker-Build genutzt:
+# `pip install --break-system-packages --no-deps .` Die oben deklarierten
+# Dependencies dienen nur der Dokumentation/Metadaten (pip show yt-upload) -
+# tatsächlich installiert werden requests/inotify bewusst über apt/apk
+# (python3-requests + python3-inotify bzw. py3-requests + py3-inotify), nicht
+# über PyPI. --no-deps stellt in jeder Installationsart sicher, dass pip
+# wirklich nur das eigene Package installiert und nichts aus dem Netz
+# nachlädt oder mit der apt/apk-Version kollidiert.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.ruff]
 line-length = 88

@@ -1,17 +1,16 @@
-import importlib.util
-import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = REPO_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "yt-upload.py"
-SPEC = importlib.util.spec_from_file_location("yt_upload", MODULE_PATH)
-yt_upload = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(yt_upload)
+from yt_upload import config, fileutils, media  # noqa: E402
 
 
 class UploaderRegressionTests(unittest.TestCase):
@@ -20,7 +19,7 @@ class UploaderRegressionTests(unittest.TestCase):
             existing = Path(temp_dir) / "video.mp4"
             existing.write_bytes(b"existing")
 
-            result = yt_upload.unique_path(temp_dir, "video.mp4")
+            result = fileutils.unique_path(temp_dir, "video.mp4")
 
             self.assertEqual(result, str(Path(temp_dir) / "video_1.mp4"))
             self.assertEqual(existing.read_bytes(), b"existing")
@@ -38,9 +37,13 @@ class UploaderRegressionTests(unittest.TestCase):
                 (work_dir / "recording_part01.mkv").write_bytes(b"part 1")
                 return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-            with patch.object(yt_upload, "WORK_DIR", str(work_dir)):
-                with patch.object(yt_upload.subprocess, "run", side_effect=fake_run):
-                    segments = yt_upload.split_video_if_needed(str(source))
+            # WORK_DIR lebt in config.py; split_video_if_needed (media.py) liest es
+            # zur Laufzeit als config.WORK_DIR, daher hier auf config patchen.
+            # subprocess.run wird dagegen dort gepatcht, wo split_video_if_needed
+            # es tatsächlich aufruft: media.py importiert subprocess selbst.
+            with patch.object(config, "WORK_DIR", str(work_dir)):
+                with patch.object(media.subprocess, "run", side_effect=fake_run):
+                    segments = media.split_video_if_needed(str(source))
 
             self.assertEqual(
                 [Path(segment).name for segment in segments],
