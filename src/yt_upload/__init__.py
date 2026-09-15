@@ -12,4 +12,4 @@ try:
 except PackageNotFoundError:
     # Docker-Image: Package wird nur kopiert (siehe bin/yt-upload-Shim),
     # nicht per pip installiert - dort existieren keine pip-Metadaten.
-    __version__ = "1.2.2"
+    __version__ = "1.2.3"
