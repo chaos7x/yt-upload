@@ -26,3 +26,8 @@ docker-compose.override.yaml
 .env
 
 docker-compose.yaml
+
+build/
+dist/
+src/*.egg-info/
+*.pyz
