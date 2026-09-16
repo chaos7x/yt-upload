@@ -95,6 +95,7 @@ def get_authorization_code(auth_uri, token_uri, client_id, redirect_uri, client_
 
     return token_response.json()
 
+
 def main():
     try:
         # Zielverzeichnis automatisch anlegen, falls es noch nicht existiert
@@ -145,6 +146,7 @@ def main():
     except KeyboardInterrupt:
         print("\n\n[ABBRUCH] Vorgang durch Benutzer abgebrochen (Strg + C). Es wurde nichts gespeichert.")
         sys.exit(130)
+
 
 if __name__ == "__main__":
     main()
