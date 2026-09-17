@@ -78,6 +78,12 @@ def pipeline():
 
 
 @pytest.fixture(scope="session")
+def main_module():
+    from yt_upload import main
+    return main
+
+
+@pytest.fixture(scope="session")
 def daemon():
     from yt_upload import daemon
     return daemon
