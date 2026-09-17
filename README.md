@@ -165,12 +165,13 @@ Alle drei Varianten lassen kein Build-Tooling (`pip`/`setuptools`, sofern nicht 
 
 ## 💻 CLI & Parameter Übersicht
 ```text
-yt-upload [-h] [-v] [-a] [-D] [--healthcheck] [-t TITLE] [-d DESCRIPTION]
+yt-upload [-h] [-v] [-a] [-D] [--healthcheck] [-t TITLE]
+          [-d DESCRIPTION | --description-file PATH]
           [-c CATEGORY] [--tags TAGS] [--privacy {public,private,unlisted}]
           [--thumbnail PATH] [--playlist PLAYLIST] [--publish-at ISO_DATE]
           [--license {youtube,creativeCommon}] [--location LOCATION]
           [--recording-date DATE] [--default-language LANG]
-          [--default-audio-language LANG] [--embeddable]
+          [--default-audio-language LANG] [--embeddable {true,false}]
           [--credentials-file PATH] [--client-secrets PATH]
           [--chunksize BYTES] [--open-link]
           [file]
@@ -285,6 +286,12 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
 
 * `-d`, `--description` `TEXT`
   Beschreibungstext für das Video.
+
+* `--description-file` `PATH`
+  Liest den Beschreibungstext stattdessen aus einer Textdatei (z. B. für längere, mehrzeilige Beschreibungen ohne Shell-Escaping). Schließt sich mit `-d`/`--description` gegenseitig aus.
+
+* `--embeddable` `{true,false}`
+  Erlaubt (`true`, Standard) oder verbietet (`false`) das Einbetten des Videos auf externen Webseiten.
 
 * `--privacy` `STATUS`
   Sichtbarkeit des Videos (`public`, `unlisted` [Standard], `private`).

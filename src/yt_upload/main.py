@@ -15,8 +15,23 @@ from yt_upload.pipeline import process_single_file
 logger = logging.getLogger(__name__)
 
 
-def parse_arguments():
-    """Initialisiert das Parsing der Kommandozeilenargumente."""
+def _parse_bool(value):
+    """argparse-Typ-Konverter für explizite Boolean-CLI-Werte (--embeddable=true/false)."""
+    normalized = str(value).strip().lower()
+    if normalized in ("true", "1", "yes", "on"):
+        return True
+    if normalized in ("false", "0", "no", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"Ungültiger Boolean-Wert: '{value}' (erwartet: true/false)")
+
+
+def parse_arguments(argv=None):
+    """Initialisiert das Parsing der Kommandozeilenargumente.
+
+    argv=None (Standard) lässt argparse wie gewohnt sys.argv[1:] lesen; ein
+    expliziter Wert (z.B. in Tests) überschreibt das, ohne sys.argv patchen
+    zu müssen.
+    """
     parser = argparse.ArgumentParser(
         description=f"{__title__} v{__version__}",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -28,7 +43,9 @@ def parse_arguments():
     parser.add_argument("--healthcheck", action="store_true", help="Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort (für Docker HEALTHCHECK)")
 
     parser.add_argument("-t", "--title", help="Video-Titel (Standard: Metadaten/Dateiname)")
-    parser.add_argument("-d", "--description", help="Video-Beschreibung")
+    desc_group = parser.add_mutually_exclusive_group()
+    desc_group.add_argument("-d", "--description", help="Video-Beschreibung")
+    desc_group.add_argument("--description-file", help="Pfad zu einer Textdatei mit der Video-Beschreibung (alternativ zu -d/--description)")
     parser.add_argument("-c", "--category", help="Kategorie ID oder Name (z.B. Entertainment, Gaming, 22)")
     parser.add_argument("-v", "--version", action="version", version=f"{__title__} v{__version__}")
     parser.add_argument("--tags", help="Kommagetrennte Liste von Tags")
@@ -44,14 +61,29 @@ def parse_arguments():
 
     parser.add_argument("--default-language", default=None, help="Standardsprache des Titels/der Beschreibung")
     parser.add_argument("--default-audio-language", default=None, help="Standardsprache des Audios")
-    parser.add_argument("--embeddable", action="store_true", default=None, help="Einbetten auf externen Seiten erlauben")
+    parser.add_argument("--embeddable", type=_parse_bool, default=None, metavar="{true,false}", help="Einbetten auf externen Seiten erlauben oder verbieten (true/false)")
 
     parser.add_argument("--credentials-file", default=None, help="Pfad zur OAuth Credentials JSON")
     parser.add_argument("--client-secrets", help="Pfad zur Google Client Secrets JSON")
     parser.add_argument("--chunksize", type=int, default=268435456, help="Upload Chunk-Größe in Bytes")
     parser.add_argument("--open-link", action="store_true", help="Nach Upload Video-URL im Standardbrowser öffnen")
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def _apply_description_file(args):
+    """
+    Ersetzt args.description durch den Inhalt von args.description_file, falls
+    gesetzt (mutually exclusive mit -d/--description, siehe parse_arguments()).
+    Bricht mit sys.exit(1) ab, wenn die angegebene Datei nicht existiert.
+    """
+    if not args.description_file:
+        return
+    if not os.path.exists(args.description_file):
+        logger.error(f"Angegebene Beschreibungsdatei existiert nicht: {args.description_file}")
+        sys.exit(1)
+    with open(args.description_file, "r", encoding="utf-8") as f:
+        args.description = f.read()
 
 
 def main():
@@ -80,6 +112,8 @@ def main():
         if not os.path.exists(args.file):
             logger.error(f"Angegebene Datei existiert nicht: {args.file}")
             sys.exit(1)
+
+        _apply_description_file(args)
         process_single_file(args.file, args)
 
     # Modus 2: Auto-Batch – verarbeitet alle bereits vorhandenen Dateien nacheinander
