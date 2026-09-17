@@ -24,8 +24,24 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
-CLIENT_SECRETS_FILE = "/app/oauth/client_secrets.json"
-OUTPUT_CREDENTIALS_FILE = "/app/oauth/youtube-upload-credentials.json"
+# Gleiche Container-Erkennung wie yt_upload.config (os.path.exists("/app/oauth")):
+# Docker mountet die OAuth-Secrets/Credentials dorthin. Bare-Metal hat keinen
+# solchen fixen Pfad - dort ist der einzige sinnvolle Default das aktuelle
+# Arbeitsverzeichnis (relativer Pfad), da get-token im Gegensatz zum
+# dauerhaft laufenden yt-upload-Dienst ein einmaliges, interaktiv vom Nutzer
+# aus einem Terminal aufgerufenes Setup-Tool ist - ein fixer, am
+# Installationsort (z.B. site-packages) orientierter Pfad wäre dort weder
+# auffindbar noch beschreibbar. Per Umgebungsvariable überschreibbar, damit
+# beide Skripte bei Bedarf explizit auf dieselbe Datei zeigen können.
+_IN_CONTAINER = os.path.exists("/app/oauth")
+CLIENT_SECRETS_FILE = os.environ.get(
+    "CLIENT_SECRETS_FILE",
+    "/app/oauth/client_secrets.json" if _IN_CONTAINER else "client_secrets.json",
+)
+OUTPUT_CREDENTIALS_FILE = os.environ.get(
+    "CREDENTIALS_FILE",
+    "/app/oauth/youtube-upload-credentials.json" if _IN_CONTAINER else "youtube-upload-credentials.json",
+)
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube"
@@ -105,8 +121,15 @@ def get_authorization_code(auth_uri, token_uri, client_id, redirect_uri, client_
 
 def main():
     try:
-        # Zielverzeichnis automatisch anlegen, falls es noch nicht existiert
-        os.makedirs(os.path.dirname(OUTPUT_CREDENTIALS_FILE), exist_ok=True)
+        # Zielverzeichnis automatisch anlegen, falls es noch nicht existiert.
+        # os.path.dirname() liefert bei einem reinen Dateinamen ohne
+        # Verzeichnisanteil (Bare-Metal-Default, relativ zum aktuellen
+        # Arbeitsverzeichnis) einen leeren String zurück - os.makedirs("")
+        # würde damit crashen, ist hier aber ohnehin unnötig (das aktuelle
+        # Arbeitsverzeichnis existiert bereits).
+        target_dir = os.path.dirname(OUTPUT_CREDENTIALS_FILE)
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
 
         client_id, client_secret, auth_uri, token_uri = load_client_secrets()
         redirect_uri = "http://localhost:8080/"
