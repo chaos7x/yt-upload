@@ -56,6 +56,14 @@ docker run --rm -it \
   ghcr.io/chaos7x/yt-upload:latest /usr/local/bin/get_token
 ```
 
+Standardmäßig zeigt `get-token`/`get_token` einen Link an, den du im Browser öffnest; nach dem Login bricht die Seite ab (Seite nicht gefunden) - kopiere in dem Fall die komplette URL aus der Adresszeile zurück ins Terminal. Dieser Copy-Paste-Schritt ist bewusst der Standard, da er unabhängig davon funktioniert, ob `get-token` und dein Browser auf demselben Rechner laufen (z. B. Docker auf einem entfernten Server/NAS, Browser auf deinem PC).
+
+Läuft `get-token` dagegen auf demselben Rechner wie dein Browser (z. B. Bare-Metal-Desktop-Nutzung, oder Docker mit explizit publiziertem Port `8080`), kannst du den Redirect automatisch abfangen lassen und dir das Copy-Paste sparen:
+
+```bash
+OAUTH_LOCAL_SERVER=true get-token
+```
+
 ### 4. Starten via Docker CLI
 ```bash
 docker run -d \
