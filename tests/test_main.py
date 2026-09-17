@@ -84,3 +84,64 @@ class TestApplyDescriptionFile:
 
         with pytest.raises(SystemExit):
             main_module._apply_description_file(args)
+
+
+class TestParseArgumentsFiles:
+    def test_no_files_is_empty_list(self, main_module):
+        args = main_module.parse_arguments(["-a"])
+        assert args.files == []
+
+    def test_single_file(self, main_module):
+        args = main_module.parse_arguments(["video.mp4"])
+        assert args.files == ["video.mp4"]
+
+    def test_multiple_files_preserve_order(self, main_module):
+        args = main_module.parse_arguments(["video1.mp4", "video2.mp4", "video3.mp4"])
+        assert args.files == ["video1.mp4", "video2.mp4", "video3.mp4"]
+
+    def test_multiple_files_with_flags_mixed_in(self, main_module):
+        args = main_module.parse_arguments(["-t", "Konzert", "video1.mp4", "video2.mp4"])
+        assert args.files == ["video1.mp4", "video2.mp4"]
+        assert args.title == "Konzert"
+
+    def test_default_title_template(self, main_module):
+        args = main_module.parse_arguments(["video.mp4"])
+        assert args.title_template == "{title} (Teil {n}/{total})"
+
+
+class TestResolveFileArgs:
+    def test_single_file_returns_args_unchanged(self, main_module):
+        args = main_module.parse_arguments(["-t", "Konzert", "video.mp4"])
+
+        result = main_module._resolve_file_args(args, index=0, total=1)
+
+        assert result is args
+        assert result.title == "Konzert"
+
+    def test_multiple_files_without_explicit_title_leaves_title_none(self, main_module):
+        args = main_module.parse_arguments(["video1.mp4", "video2.mp4"])
+
+        result = main_module._resolve_file_args(args, index=0, total=2)
+
+        assert result is args
+        assert result.title is None
+
+    def test_multiple_files_with_explicit_title_applies_template(self, main_module):
+        args = main_module.parse_arguments(["-t", "Konzert", "video1.mp4", "video2.mp4", "video3.mp4"])
+
+        first = main_module._resolve_file_args(args, index=0, total=3)
+        second = main_module._resolve_file_args(args, index=1, total=3)
+
+        assert first.title == "Konzert (Teil 1/3)"
+        assert second.title == "Konzert (Teil 2/3)"
+        # Das Original bleibt unangetastet, damit jede Iteration von args ausgeht statt kumulativ zu mutieren
+        assert args.title == "Konzert"
+
+    def test_custom_title_template_placeholders(self, main_module):
+        args = main_module.parse_arguments([
+            "-t", "Konzert", "--title-template", "{title} [{n}/{total}]", "video1.mp4", "video2.mp4"
+        ])
+
+        result = main_module._resolve_file_args(args, index=1, total=2)
+
+        assert result.title == "Konzert [2/2]"

@@ -174,6 +174,7 @@ Alle drei Varianten lassen kein Build-Tooling (`pip`/`setuptools`, sofern nicht 
 ## 💻 CLI & Parameter Übersicht
 ```text
 yt-upload [-h] [-v] [-a] [-D] [--healthcheck] [-t TITLE]
+          [--title-template TEMPLATE]
           [-d DESCRIPTION | --description-file PATH]
           [-c CATEGORY] [--tags TAGS] [--privacy {public,private,unlisted}]
           [--thumbnail PATH] [--playlist PLAYLIST] [--publish-at ISO_DATE]
@@ -182,7 +183,7 @@ yt-upload [-h] [-v] [-a] [-D] [--healthcheck] [-t TITLE]
           [--default-audio-language LANG] [--embeddable {true,false}]
           [--credentials-file PATH] [--client-secrets PATH]
           [--chunksize BYTES] [--open-link]
-          [file]
+          [file ...]
 ```
 
 ### Die Konfig-Datei `upload.conf`
@@ -288,6 +289,12 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
 
 * `-t`, `--title` `TEXT`
   Setzt explizit den Videotitel (überschreibt ausgelesene Metadaten).
+
+* `file [file ...]`
+  Mehrere Videodateien in einem Aufruf hochladen (`yt-upload video1.mp4 video2.mp4 ...`), nacheinander mit denselben Metadaten. Bricht auf einmal ab, falls eine der Dateien nicht existiert, statt teilweise zu verarbeiten.
+
+* `--title-template` `TEMPLATE` (Standard: `{title} (Teil {n}/{total})`)
+  Nur wirksam bei mehreren Dateien **und** explizit gesetztem `-t`/`--title`: numeriert den gemeinsamen Titel pro Datei durch (Platzhalter `{title}`, `{n}`, `{total}`). Ohne explizites `-t` behält jede Datei ihren eigenen, aus Metadaten/Dateiname abgeleiteten Titel.
 
 * `-c`, `--category` `NAME/ID`
   Name oder YouTube Category-ID (z. B. `Entertainment`, `Gaming`, `22`).
