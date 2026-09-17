@@ -5,7 +5,27 @@
 FROM mwader/static-ffmpeg:latest AS ffmpeg-binaries
 
 # ==========================================
-# STUFE 1: FINAL STAGE (Schlankes Laufzeit-Image)
+# STUFE 1: Builder - installiert yt_upload (+ get_token) und alle
+# Laufzeit-Abhängigkeiten isoliert per pip
+# ==========================================
+# Anders als vorher (pip direkt im finalen Image): auch dieses Image baut
+# bewusst komplett auf pip auf (kein apt/apk-Äquivalent für requests/inotify
+# hier gewünscht), aber pip/setuptools UND die Build-Toolchain sollen trotzdem
+# nicht im Laufzeit-Image landen. --target sammelt daher alle Pakete (eigenes
+# Package + requests + inotify + deren jeweilige Abhängigkeiten) flach in
+# einem Ordner, den die Final-Stage gezielt übernimmt (siehe LAYER 3 dort).
+FROM python:3-slim AS builder
+
+WORKDIR /build
+COPY pyproject.toml /build/pyproject.toml
+COPY src/ /build/src/
+# ".[daemon]" installiert das eigene Package UND requests/inotify in einem
+# Rutsch, direkt aus den in pyproject.toml deklarierten Dependencies - keine
+# doppelte Pflege der Paketnamen an zwei Stellen.
+RUN pip install --no-cache-dir --break-system-packages --target=/install ".[daemon]"
+
+# ==========================================
+# STUFE 2: FINAL STAGE (Schlankes Laufzeit-Image, kein pip/setuptools)
 # ==========================================
 FROM python:3-slim
 
@@ -17,10 +37,10 @@ COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
 
 # ==========================================
 # LAYER 2: System-Tools & C-Bibliotheken über apt
-# (Python-Module wandern ab jetzt in pip!)
 # ==========================================
 # Installiert ExifTool, Midnight Commander (mc)
-# sowie ca-certificates direkt über den Paketmanager.
+# sowie ca-certificates direkt über den Paketmanager. Bewusst OHNE pip/
+# setuptools - die werden nur im Builder (STUFE 1) gebraucht.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcom-err2 \
     mc \
@@ -31,20 +51,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 ENV HOME=/app
 
-# ==========================================
-# LAYER 3: yt_upload-Package + Python-Abhängigkeiten über pip installieren
-# ==========================================
-# Anders als im Debian-/Alpine-Dockerfile: hier gibt es keinen Grund für
-# --target/PYTHONPATH-Klimmzüge oder eine separate Builder-Stage, um pip aus
-# dem finalen Image rauszuhalten - dieses Image baut ja bewusst komplett auf
-# pip auf (python:3-slim bringt pip schon mit). ".[daemon]" installiert das
-# eigene Package UND requests/inotify in einem Rutsch, direkt aus den in
-# pyproject.toml deklarierten Dependencies - keine doppelte Pflege der
-# Paketnamen an zwei Stellen mehr.
-COPY pyproject.toml /app/pyproject.toml
-COPY src/ /app/src/
-RUN pip install --no-cache-dir --break-system-packages ".[daemon]" \
-    && rm -rf /app/pyproject.toml /app/src /app/build
+# ------------------------------------------
+# LAYER 3: yt_upload-Package + Python-Abhängigkeiten aus dem Builder übernehmen
+# ------------------------------------------
+# Gezielt einzeln statt das komplette /install-Verzeichnis zu übernehmen:
+# das inotify-Paket deklariert fälschlich "build" (samt dessen eigenen
+# Abhängigkeiten packaging/pyproject_hooks) als Laufzeit-Dependency, obwohl
+# es nirgends importiert wird (nur zum Wheel-Bauen gebraucht) - das würde
+# sonst ungenutzt im Laufzeit-Image landen. get_token wird bewusst NICHT aus
+# dem Builder übernommen (siehe LAYER 5 - eigenständiger Bare-Datei-Kopie
+# statt des pip-Installs, damit es unabhängig vom yt_upload-Package bleibt).
+COPY --from=builder /install/bin/yt-upload /usr/local/bin/yt-upload
+COPY --from=builder /install/bin/get-token /usr/local/bin/get-token
+COPY --from=builder /install/yt_upload /usr/local/lib/yt-upload/yt_upload
+COPY --from=builder /install/yt_upload-*.dist-info /usr/local/lib/yt-upload/yt_upload.dist-info
+COPY --from=builder /install/get_token /usr/local/lib/yt-upload/get_token
+COPY --from=builder /install/requests /usr/local/lib/yt-upload/requests
+COPY --from=builder /install/requests-*.dist-info /usr/local/lib/yt-upload/requests.dist-info
+COPY --from=builder /install/urllib3 /usr/local/lib/yt-upload/urllib3
+COPY --from=builder /install/urllib3-*.dist-info /usr/local/lib/yt-upload/urllib3.dist-info
+COPY --from=builder /install/idna /usr/local/lib/yt-upload/idna
+COPY --from=builder /install/idna-*.dist-info /usr/local/lib/yt-upload/idna.dist-info
+COPY --from=builder /install/certifi /usr/local/lib/yt-upload/certifi
+COPY --from=builder /install/certifi-*.dist-info /usr/local/lib/yt-upload/certifi.dist-info
+COPY --from=builder /install/charset_normalizer /usr/local/lib/yt-upload/charset_normalizer
+COPY --from=builder /install/charset_normalizer-*.dist-info /usr/local/lib/yt-upload/charset_normalizer.dist-info
+COPY --from=builder /install/inotify /usr/local/lib/yt-upload/inotify
+COPY --from=builder /install/inotify-*.dist-info /usr/local/lib/yt-upload/inotify.dist-info
+ENV PYTHONPATH=/usr/local/lib/yt-upload
 
 # ------------------------------------------
 # LAYER 4: Daten- & Log-Verzeichnisse anlegen
