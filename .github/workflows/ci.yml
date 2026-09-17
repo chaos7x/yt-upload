@@ -25,4 +25,4 @@ jobs:
         run: pytest -v
 
       - name: Linting ausführen
-        run: ruff check src/yt_upload/
+        run: ruff check src/yt_upload/ src/get_token/
