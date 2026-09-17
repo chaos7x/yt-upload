@@ -15,6 +15,7 @@ daemon = ["inotify"]
 
 [project.scripts]
 yt-upload = "yt_upload.main:main"
+get-token = "get_token.get_token:main"
 
 # Wird sowohl für die Bare-Metal-Installation als auch im Docker-Build genutzt:
 # `pip install --break-system-packages --no-deps .` Die oben deklarierten

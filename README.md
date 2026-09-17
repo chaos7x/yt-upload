@@ -143,7 +143,7 @@ cd /pfad/zu/yt-upload
 pip install --break-system-packages --no-deps .
 ```
 
-Danach steht der Befehl `yt-upload` systemweit zur Verfügung (`yt-upload --version` zum Testen). Für ein Update genügt ein erneuter `pip install ...`-Aufruf im aktualisierten Repo-Verzeichnis.
+Danach stehen die Befehle `yt-upload` und `get-token` systemweit zur Verfügung (`yt-upload --version` zum Testen). `get-token` führt denselben interaktiven OAuth-Flow wie im Docker-Setup (Schritt 3 oben) aus, liest `client_secrets.json` dabei aber standardmäßig von `/app/oauth/client_secrets.json` (per `CLIENT_SECRETS_FILE`-Konstante im Skript anpassbar) und schreibt die Credentials nach `/app/oauth/youtube-upload-credentials.json`. Für ein Update genügt ein erneuter `pip install ...`-Aufruf im aktualisierten Repo-Verzeichnis.
 
 Die Logdatei landet je nach Umgebung automatisch am sinnvollsten Ort (`/var/log/yt-upload/`, sofern beschreibbar und ein klassischer Syslog-Daemon läuft, sonst nur auf `stdout`/journald) - siehe `LOG_FILE`-Umgebungsvariable, falls ein fester Pfad gewünscht ist.
 
