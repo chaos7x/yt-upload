@@ -10,8 +10,12 @@ sind isoliert testbar.
 
 import builtins
 import json
+import socket
+import threading
+import time
 
 import pytest
+import requests
 
 
 class FakeTokenResponse:
@@ -157,3 +161,88 @@ class TestGetAuthorizationCode:
             get_token_module.get_authorization_code(
                 "https://auth", "https://token", "cid", "http://localhost:8080/", "csecret"
             )
+
+    def test_local_server_flow_used_when_enabled(self, get_token_module, monkeypatch):
+        """
+        OAUTH_LOCAL_SERVER=true: input() darf gar nicht erst aufgerufen werden,
+        stattdessen wird der Browser geöffnet und auf den lokalen Server gewartet.
+        _await_redirect_via_local_server() selbst hat ihren eigenen End-to-End-Test
+        (TestAwaitRedirectViaLocalServer) und wird hier bewusst gemockt.
+        """
+        monkeypatch.setattr(get_token_module, "USE_LOCAL_SERVER", True)
+        monkeypatch.setattr(
+            builtins, "input",
+            lambda prompt: (_ for _ in ()).throw(AssertionError("input() sollte bei OAUTH_LOCAL_SERVER nicht aufgerufen werden"))
+        )
+        opened_urls = []
+        monkeypatch.setattr(get_token_module.webbrowser, "open", lambda url: opened_urls.append(url))
+        monkeypatch.setattr(
+            get_token_module, "_await_redirect_via_local_server",
+            lambda redirect_uri: "state=FIXEDSTATE&code=AUTHCODE123"
+        )
+        monkeypatch.setattr(
+            get_token_module.requests, "post",
+            lambda *a, **k: FakeTokenResponse(200, json_data={"access_token": "AT", "refresh_token": "RT"})
+        )
+
+        result = get_token_module.get_authorization_code(
+            "https://auth", "https://token", "cid", "http://localhost:8080/", "csecret"
+        )
+
+        assert result == {"access_token": "AT", "refresh_token": "RT"}
+        assert opened_urls and opened_urls[0].startswith("https://auth?")
+
+    def test_local_server_flow_still_validates_state(self, get_token_module, monkeypatch):
+        monkeypatch.setattr(get_token_module, "USE_LOCAL_SERVER", True)
+        monkeypatch.setattr(get_token_module.webbrowser, "open", lambda url: None)
+        monkeypatch.setattr(
+            get_token_module, "_await_redirect_via_local_server",
+            lambda redirect_uri: "state=WRONGSTATE&code=AUTHCODE123"
+        )
+
+        with pytest.raises(RuntimeError, match="State"):
+            get_token_module.get_authorization_code(
+                "https://auth", "https://token", "cid", "http://localhost:8080/", "csecret"
+            )
+
+
+class TestAwaitRedirectViaLocalServer:
+    def test_captures_query_string_from_incoming_request(self, get_token_module):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("localhost", 0))
+            port = probe.getsockname()[1]
+        redirect_uri = f"http://localhost:{port}/"
+
+        result = {}
+
+        def _run():
+            result["query"] = get_token_module._await_redirect_via_local_server(redirect_uri)
+
+        thread = threading.Thread(target=_run)
+        thread.start()
+
+        deadline = time.monotonic() + 5
+        response = None
+        last_error = None
+        while time.monotonic() < deadline and response is None:
+            try:
+                response = requests.get(f"{redirect_uri}?code=ABC123&state=XYZ", timeout=1)
+            except requests.exceptions.ConnectionError as e:
+                last_error = e
+                time.sleep(0.05)
+
+        thread.join(timeout=5)
+
+        assert response is not None, f"Lokaler Server nie erreichbar geworden: {last_error}"
+        assert response.status_code == 200
+        assert "Authentifizierung abgeschlossen" in response.text
+        assert result["query"] == "code=ABC123&state=XYZ"
+
+    def test_port_already_in_use_raises_runtime_error(self, get_token_module):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker:
+            blocker.bind(("localhost", 0))
+            port = blocker.getsockname()[1]
+            blocker.listen(1)
+
+            with pytest.raises(RuntimeError, match="lokalen OAuth-Callback-Server"):
+                get_token_module._await_redirect_via_local_server(f"http://localhost:{port}/")

@@ -19,10 +19,25 @@ import json
 import os
 import secrets
 import sys
+import webbrowser
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
+
+# Standardmäßig AUS: der klassische Copy-Paste-Flow (URL manuell aus dem
+# Browser einfügen) funktioniert unabhängig davon, ob get-token und der
+# Browser auf demselben Rechner laufen - das ist der übliche Fall, wenn
+# get-token per `docker run -it ... get_token` auf einem entfernten
+# Server/NAS ausgeführt wird, während der Browser auf einem anderen Gerät
+# läuft. Der lokale Callback-Server (OAUTH_LOCAL_SERVER=true) fängt den
+# Redirect zwar automatisch ab und erspart das Copy-Paste, funktioniert aber
+# NUR, wenn der Browser tatsächlich http://localhost:8080/ auf demselben
+# Rechner erreichen kann (z.B. Bare-Metal-Desktop-Nutzung, oder Docker mit
+# explizit publiziertem Port 8080) - daher bewusst Opt-in per Env-Var statt
+# neuer Standard.
+USE_LOCAL_SERVER = os.environ.get("OAUTH_LOCAL_SERVER", "").strip().lower() in ("true", "yes", "1", "on")
 
 # Gleiche Container-Erkennung wie yt_upload.config (os.path.exists("/app/oauth")):
 # Docker mountet die OAuth-Secrets/Credentials dorthin. Bare-Metal hat keinen
@@ -71,6 +86,55 @@ def load_client_secrets():
     return client_id, client_secret, auth_uri, token_uri
 
 
+class _OAuthCallbackHandler(BaseHTTPRequestHandler):
+    """
+    Fängt genau einen OAuth-Redirect lokal ab (nur bei OAUTH_LOCAL_SERVER=true).
+    BaseHTTPRequestHandler wird von HTTPServer pro Request neu instanziiert und
+    kann daher keinen eigenen Zustand über den Request hinaus halten - der
+    Query-String wird deshalb auf dem (langlebigen) server-Objekt abgelegt.
+    """
+
+    def do_GET(self):
+        self.server.callback_query = urlparse(self.path).query
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(
+            "<html><body><h1>Authentifizierung abgeschlossen.</h1>"
+            "<p>Du kannst dieses Fenster jetzt schließen und zum Terminal zurückkehren.</p>"
+            "</body></html>".encode("utf-8")
+        )
+
+    def log_message(self, fmt, *args):
+        pass  # Unterdrückt BaseHTTPRequestHandlers Standard-Zugriffslog auf stderr
+
+
+def _await_redirect_via_local_server(redirect_uri):
+    """
+    Startet einen einmaligen lokalen HTTP-Server auf redirect_uri und blockiert,
+    bis genau ein Request eintrifft (der OAuth-Redirect von Google). Gibt dessen
+    Query-String zurück. Siehe OAUTH_LOCAL_SERVER-Kommentar weiter oben zu den
+    Voraussetzungen (Browser muss redirect_uri auf demselben Rechner erreichen).
+    """
+    parsed = urlparse(redirect_uri)
+    try:
+        server = HTTPServer((parsed.hostname, parsed.port), _OAuthCallbackHandler)
+    except OSError as e:
+        raise RuntimeError(
+            f"Konnte lokalen OAuth-Callback-Server nicht auf {redirect_uri} starten ({e}). "
+            "Läuft bereits ein anderer Prozess auf diesem Port? Falls get-token auf einem "
+            "anderen Rechner als der Browser läuft (z.B. Docker/SSH auf einem Server), "
+            "funktioniert OAUTH_LOCAL_SERVER ohnehin nicht - Variable nicht setzen."
+        ) from e
+
+    server.callback_query = None
+    try:
+        server.handle_request()
+    finally:
+        server.server_close()
+    return server.callback_query or ""
+
+
 def get_authorization_code(auth_uri, token_uri, client_id, redirect_uri, client_secret):
     state = secrets.token_urlsafe(32)
     auth_params = {
@@ -84,16 +148,27 @@ def get_authorization_code(auth_uri, token_uri, client_id, redirect_uri, client_
     }
     auth_url = f"{auth_uri}?{urlencode(auth_params)}"
 
-    print("\n1. Öffne diesen Link im Browser:\n")
-    print(auth_url)
-    print("\n----------------------------------------------------------------")
-    print("2. Logge dich ein und erlaube den Zugriff.")
-    print("3. Nach dem Klick auf 'Zulassen' bricht der Browser ab (Seite nicht gefunden).")
-    print("4. Kopiere die KOMPLETTE URL aus der Adresszeile.")
-    print("----------------------------------------------------------------\n")
+    if USE_LOCAL_SERVER:
+        print("\n1. Öffne diesen Link im Browser (öffnet sich ggf. automatisch):\n")
+        print(auth_url)
+        print("\n----------------------------------------------------------------")
+        print("2. Logge dich ein und erlaube den Zugriff.")
+        print(f"3. OAUTH_LOCAL_SERVER ist aktiv: {redirect_uri} wird automatisch abgefangen,")
+        print("   kein Copy-Paste der URL nötig. Warte auf die Weiterleitung...")
+        print("----------------------------------------------------------------\n")
+        webbrowser.open(auth_url)
+        query = parse_qs(_await_redirect_via_local_server(redirect_uri))
+    else:
+        print("\n1. Öffne diesen Link im Browser:\n")
+        print(auth_url)
+        print("\n----------------------------------------------------------------")
+        print("2. Logge dich ein und erlaube den Zugriff.")
+        print("3. Nach dem Klick auf 'Zulassen' bricht der Browser ab (Seite nicht gefunden).")
+        print("4. Kopiere die KOMPLETTE URL aus der Adresszeile.")
+        print("----------------------------------------------------------------\n")
 
-    redirect_response = input("Füge die kopierte URL hier ein: ").strip()
-    query = parse_qs(urlparse(redirect_response).query)
+        redirect_response = input("Füge die kopierte URL hier ein: ").strip()
+        query = parse_qs(urlparse(redirect_response).query)
 
     if query.get("error"):
         raise RuntimeError(f"Google OAuth wurde abgebrochen: {query['error'][0]}")
