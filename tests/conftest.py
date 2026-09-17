@@ -31,7 +31,7 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-GET_TOKEN_PATH = REPO_ROOT / "get_token.py"
+GET_TOKEN_PATH = SRC_DIR / "get_token" / "get_token.py"
 
 
 @pytest.fixture(scope="session")
