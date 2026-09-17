@@ -66,7 +66,12 @@ ENV HOME=/app
 # ------------------------------------------
 # LAYER 3: Daten- & Log-Verzeichnisse anlegen
 # ------------------------------------------
-RUN mkdir -p /videos /log /etc/yt-upload/conf.d && chmod 777 /videos /log
+# 1777 statt 777: die Laufzeit-UID ist unbekannt (frei wählbar via `docker run -u`,
+# um Berechtigungskonflikte mit host-gemounteten Verzeichnissen zu vermeiden),
+# daher müssen beide Verzeichnisse für jede UID beschreibbar bleiben. Das
+# Sticky-Bit (wie bei /tmp) verhindert aber, dass ein Prozess/Nutzer Dateien
+# löschen oder umbenennen kann, die ein anderer angelegt hat.
+RUN mkdir -p /videos /log /etc/yt-upload/conf.d && chmod 1777 /videos /log
 
 # ------------------------------------------
 # LAYER 4: Lokale Skripte, Package & Configs kopieren

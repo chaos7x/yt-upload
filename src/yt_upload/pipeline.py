@@ -24,6 +24,26 @@ from yt_upload.youtube_api import upload_single_video
 logger = logging.getLogger(__name__)
 
 
+def _quarantine_symlink(file_path, filename):
+    """
+    Verschiebt einen abgelehnten Symlink nach CORRUPT_DIR, OHNE ihn dabei
+    jemals aufzulösen. shutil.move() würde bei einem Dateisystemwechsel
+    zwischen IN_DIR und CORRUPT_DIR auf shutil.copy2() zurückfallen, das
+    Symlinks standardmäßig dereferenziert (den Inhalt des Linkziels kopiert)
+    - genau das Risiko, das process_single_file() mit der vorgelagerten
+    is_symlink()-Prüfung eigentlich verhindern soll. os.rename() bewegt den
+    Symlink selbst; schlägt das fehl (anderes Dateisystem), wird der Link am
+    Ziel identisch nachgebildet statt aufgelöst.
+    """
+    target_corrupt = resolve_target_path(config.CORRUPT_DIR, filename)
+    try:
+        os.rename(file_path, target_corrupt)
+    except OSError:
+        os.symlink(os.readlink(file_path), target_corrupt)
+        os.unlink(file_path)
+    return target_corrupt
+
+
 def process_single_file(file_path, args=None):
     """
     Steuert die vollständige Verarbeitung einer Datei:
@@ -36,6 +56,16 @@ def process_single_file(file_path, args=None):
     """
     filename = os.path.basename(file_path)
     logger.info(f"--- VERARBEITE DATEI: {filename} ---")
+
+    # Symlinks ablehnen, BEVOR irgendeine Funktion die Datei öffnet
+    # (is_file_ready_and_valid() ruft ffprobe auf, das dem Link transparent
+    # folgen würde). Ein Symlink mit erlaubter Endung (z.B. "video.mp4" ->
+    # eine beliebige lesbare Datei) in IN_DIR wäre sonst ein Primitive dafür,
+    # beliebigen Dateiinhalt öffentlich zu YouTube hochzuladen.
+    if os.path.islink(file_path):
+        logger.warning(f"⚠️ Symlink wird nicht verarbeitet (Sicherheitsrisiko): {filename}. Verschiebe nach CORRUPT...")
+        _quarantine_symlink(file_path, filename)
+        return
 
     # Vorab-Prüfung auf Integrität der Quelldatei
     if not is_file_ready_and_valid(file_path):
