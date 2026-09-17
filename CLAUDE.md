@@ -15,7 +15,7 @@ pytest -v
 pytest tests/test_youtube_api.py::TestGetAccessToken::test_success_returns_access_token_and_sends_refresh_token -v
 
 # Lint (CI's actual scope — see "Lint scope" below)
-ruff check src/yt_upload/
+ruff check src/yt_upload/ src/get_token/
 
 # Bare-metal install (also installs the `yt-upload` and `get-token` console scripts)
 pip install --break-system-packages --no-deps .
@@ -29,11 +29,11 @@ pip install --break-system-packages --no-deps .
 ./build-pyz.sh                # produces yt-upload.pyz and get-token.pyz
 ```
 
-CI (`.github/workflows/ci.yml`) runs `pytest -v` then `ruff check src/yt_upload/` on every PR and push to `main`.
+CI (`.github/workflows/ci.yml`) runs `pytest -v` then `ruff check src/yt_upload/ src/get_token/` on every PR and push to `main`.
 
 ### Lint scope
 
-`ruff check` is only run against `src/yt_upload/` by convention (matches CI and the README). `tests/` and `src/get_token/` are not part of that convention and may carry pre-existing, separately-tracked lint issues — don't be surprised if `ruff check .` (whole repo) turns up things outside the scope of whatever you're working on.
+`ruff check` covers `src/yt_upload/` and `src/get_token/` (matches CI). `tests/` is not part of that convention and may carry pre-existing, separately-tracked lint issues — don't be surprised if `ruff check .` (whole repo) turns up things outside the scope of whatever you're working on.
 
 ### `tests/` is gitignored but tracked
 
