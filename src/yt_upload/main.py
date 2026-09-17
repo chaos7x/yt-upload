@@ -37,12 +37,21 @@ def parse_arguments(argv=None):
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument("file", nargs="?", help="Pfad zur hochzuladenden Videodatei (im manuellen Modus)")
+    parser.add_argument(
+        "files", nargs="*", metavar="file",
+        help="Pfad(e) zur/zu den hochzuladenden Videodatei(en) (im manuellen Modus). Bei mehreren "
+             "Dateien werden diese nacheinander mit denselben Metadaten hochgeladen (siehe --title-template)."
+    )
     parser.add_argument("-a", "--auto", action="store_true", help="Automatischer Batch-Modus für ein Verzeichnis")
     parser.add_argument("-D", "--daemon", action="store_true", help="Dämon-Modus: Dauerhafte inotify-Verzeichnisüberwachung")
     parser.add_argument("--healthcheck", action="store_true", help="Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort (für Docker HEALTHCHECK)")
 
     parser.add_argument("-t", "--title", help="Video-Titel (Standard: Metadaten/Dateiname)")
+    parser.add_argument(
+        "--title-template", default="{title} (Teil {n}/{total})",
+        help="Titel-Vorlage bei mehreren Dateien in einem Aufruf (nur wirksam, wenn -t/--title "
+             "gesetzt ist). Platzhalter: {title}, {n} (1-basierter Index), {total}"
+    )
     desc_group = parser.add_mutually_exclusive_group()
     desc_group.add_argument("-d", "--description", help="Video-Beschreibung")
     desc_group.add_argument("--description-file", help="Pfad zu einer Textdatei mit der Video-Beschreibung (alternativ zu -d/--description)")
@@ -86,6 +95,21 @@ def _apply_description_file(args):
         args.description = f.read()
 
 
+def _resolve_file_args(args, index, total):
+    """
+    Wendet bei mehreren Dateien in einem Aufruf --title-template auf einen
+    expliziten -t/--title an (z.B. "Konzert (Teil 2/3)"). Ohne explizit gesetzten
+    Titel bleibt args.title unverändert (None), da process_single_file() dann
+    ohnehin pro Datei einen eigenen Titel aus Metadaten/Dateiname ableitet - eine
+    Nummerierung ergäbe dort keinen Sinn, weil die Titel schon unterschiedlich sind.
+    """
+    if total <= 1 or not args.title:
+        return args
+    file_args = argparse.Namespace(**vars(args))
+    file_args.title = args.title_template.format(title=args.title, n=index + 1, total=total)
+    return file_args
+
+
 def main():
     """Hauptablaufsteuerung abhängig von den übergebenen Parametern."""
     # --healthcheck wird bewusst vor jeglicher Config-/Verzeichnis-/Logging-
@@ -107,14 +131,19 @@ def main():
     if not acquire_instance_lock():
         sys.exit(1)
 
-    # Modus 1: Manueller Upload einer angegebenen Datei
-    if args.file:
-        if not os.path.exists(args.file):
-            logger.error(f"Angegebene Datei existiert nicht: {args.file}")
+    # Modus 1: Manueller Upload einer oder mehrerer angegebener Dateien
+    if args.files:
+        missing = [f for f in args.files if not os.path.exists(f)]
+        if missing:
+            for f in missing:
+                logger.error(f"Angegebene Datei existiert nicht: {f}")
             sys.exit(1)
 
         _apply_description_file(args)
-        process_single_file(args.file, args)
+
+        total = len(args.files)
+        for index, file_path in enumerate(args.files):
+            process_single_file(file_path, _resolve_file_args(args, index, total))
 
     # Modus 2: Auto-Batch – verarbeitet alle bereits vorhandenen Dateien nacheinander
     elif args.auto:
@@ -134,6 +163,7 @@ def main():
         print(f"{__title__} v{__version__}\n")
         print("Bitte einen Betriebsmodus wählen:")
         print("  - Einzelne Datei:  yt-upload /pfad/zum/video.mp4")
+        print("  - Mehrere Dateien: yt-upload video1.mp4 video2.mp4 ...")
         print("  - Auto-Pipeline:   yt-upload -a")
         print("  - Dämon-Modus:     yt-upload -D")
         print("\nNutze -h oder --help für alle Optionen.")
