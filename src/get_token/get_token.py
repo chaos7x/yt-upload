@@ -36,11 +36,18 @@ def load_client_secrets():
     with open(CLIENT_SECRETS_FILE, "r", encoding="utf-8") as secrets_file:
         data = json.load(secrets_file)
 
-    client_data = data.get("installed") or data.get("web") or data
-    client_id = client_data.get("client_id")
-    client_secret = client_data.get("client_secret")
-    auth_uri = client_data.get("auth_uri", "https://accounts.google.com/o/oauth2/v2/auth")
-    token_uri = client_data.get("token_uri", "https://oauth2.googleapis.com/token")
+    # Gleiche Präzedenz wie yt_upload.youtube_api.get_access_token() beim Lesen
+    # von client_secrets.json (flache Top-Level-Felder vor installed/web-Wrapper):
+    # get_token.py wird im Dockerfile als eigenständige Datei nach
+    # /usr/local/bin/get_token kopiert und kann daher nicht vom yt_upload-Package
+    # importieren, soll dieselbe Datei aber identisch interpretieren wie dieses.
+    # `or` statt `dict.get(key, default)` sorgt zusätzlich dafür, dass ein leerer
+    # String (z.B. "auth_uri": "") ebenfalls auf den Google-Default zurückfällt.
+    nested = data.get("installed") or data.get("web") or {}
+    client_id = data.get("client_id") or nested.get("client_id")
+    client_secret = data.get("client_secret") or nested.get("client_secret")
+    auth_uri = data.get("auth_uri") or nested.get("auth_uri") or "https://accounts.google.com/o/oauth2/v2/auth"
+    token_uri = data.get("token_uri") or nested.get("token_uri") or "https://oauth2.googleapis.com/token"
 
     if not client_id or not client_secret:
         raise ValueError("client_id oder client_secret fehlt in der Client-Secrets-Datei.")
@@ -112,6 +119,12 @@ def main():
         expires_in = int(token_response.get("expires_in", 3600))
         expiry_str = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        # Tatsächlich von Google gewährten Scope verwenden statt blind der
+        # angeforderten SCOPES, falls Google (z.B. bei partieller Zustimmung)
+        # einen engeren Scope zurückliefert.
+        granted_scope = token_response.get("scope") or " ".join(SCOPES)
+        granted_scopes = granted_scope.split()
+
         legacy_credentials = {
             "access_token": token_response.get("access_token"),
             "client_id": client_id,
@@ -127,25 +140,32 @@ def main():
                 "access_token": token_response.get("access_token"),
                 "expires_in": expires_in,
                 "refresh_token": refresh_token,
-                "scope": " ".join(SCOPES),
+                "scope": granted_scope,
                 "token_type": token_response.get("token_type", "Bearer")
             },
-            "scopes": SCOPES,
+            "scopes": granted_scopes,
             "token_info_uri": "https://oauth2.googleapis.com/tokeninfo",
             "invalid": False,
             "_class": "OAuth2Credentials",
             "_module": "oauth2client.client"
         }
         
-        with open(OUTPUT_CREDENTIALS_FILE, "w") as f:
+        # Datei direkt mit Modus 600 anlegen (statt nachträglichem chmod), damit sie
+        # zu keinem Zeitpunkt mit dem Standard-umask (z.B. 644) für Gruppe/Andere
+        # lesbar auf der Platte liegt - die Datei enthält Client-Secret & Refresh-Token
+        # im Klartext.
+        fd = os.open(OUTPUT_CREDENTIALS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(legacy_credentials, f, indent=2)
-        os.chmod(OUTPUT_CREDENTIALS_FILE, 0o600)
-            
+
         print(f"\n[ERFOLG] {OUTPUT_CREDENTIALS_FILE} wurde erfolgreich erstellt!")
 
     except KeyboardInterrupt:
         print("\n\n[ABBRUCH] Vorgang durch Benutzer abgebrochen (Strg + C). Es wurde nichts gespeichert.")
         sys.exit(130)
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as e:
+        print(f"\n[FEHLER] {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
