@@ -4,7 +4,6 @@ videos/
 oauth/
 app/
 config/
-tests/
 
 # Lokale Tooling-Konfiguration ausschließen
 .github/agents/
