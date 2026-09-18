@@ -1,0 +1,51 @@
+name: Docker Build
+
+# Baut alle Dockerfile-Varianten auf jedem PR und Push nach main, OHNE zu
+# pushen - reine Build-Validierung. docker-release.yml baut (und pusht nach
+# GHCR) nur bei Tag-Pushes bzw. manuell und deckt Dockerfile.pyimg gar nicht
+# ab - ohne diesen Workflow würde ein kaputtes Dockerfile erst beim nächsten
+# tatsächlichen Release aus fallen, nicht schon im PR.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - dockerfile: ./Dockerfile
+            name: debian
+          - dockerfile: ./Dockerfile.alpine
+            name: alpine
+          - dockerfile: ./Dockerfile.pyimg
+            name: pyimg
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Datum ermitteln
+        id: date
+        run: echo "date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Docker Image bauen (${{ matrix.variant.name }}, kein Push)
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.variant.dockerfile }}
+          platforms: linux/amd64
+          push: false
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+            BUILD_DATE=${{ steps.date.outputs.date }}
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
