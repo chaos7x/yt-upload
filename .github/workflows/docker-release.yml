@@ -21,6 +21,9 @@ jobs:
     permissions:
       contents: write
       packages: write
+    outputs:
+      version: ${{ steps.bump_version.outputs.version }}
+      is_os_patch: ${{ steps.bump_version.outputs.is_os_patch }}
 
     strategy:
       matrix:
@@ -60,6 +63,19 @@ jobs:
 
           echo "Bauen mit Ziel-Version: $TARGET_VERSION"
           echo "version=$TARGET_VERSION" >> $GITHUB_OUTPUT
+
+          # Eine vierte Versionsstelle (vX.Y.Z.N) ist ausschliesslich fuer
+          # os-patch-release.yml's monatliche, rein OS-Patch-getriebene
+          # Releases reserviert (siehe dortiger Kommentar) - da sich dabei
+          # nur das Docker-Basis-Image aendert, nicht dieses Package, waere
+          # ein erneuter .deb-Build reines Rauschen (identischer Inhalt,
+          # neue Versionsnummer).
+          DOT_COUNT=$(grep -o "\." <<< "$TARGET_VERSION" | wc -l)
+          if [ "$DOT_COUNT" -ge 3 ]; then
+            echo "is_os_patch=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_os_patch=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Log in zur GitHub Container Registry
         uses: docker/login-action@v4
@@ -109,5 +125,75 @@ jobs:
           tag_name: ${{ steps.bump_version.outputs.version }}
           name: Release ${{ steps.bump_version.outputs.version }}
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-deb:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: needs.build-and-push.outputs.is_os_patch != 'true'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: fpm installieren
+        run: sudo gem install --no-document fpm
+
+      - name: Package per pip in ein Zielverzeichnis installieren
+        run: python3 -m pip install --no-deps --no-cache-dir --target=install .
+
+      - name: .deb-Verzeichnisstruktur aufbauen
+        run: |
+          VERSION="${{ needs.build-and-push.outputs.version }}"
+          echo "DEB_VERSION=${VERSION#v}" >> "$GITHUB_ENV"
+
+          # Shebang auf den System-Python fixen - pip schreibt sonst den
+          # Interpreter-Pfad DIESES Runners rein, der auf einer echten
+          # Debian/Ubuntu-Installation nicht existiert.
+          sed -i '1s|.*|#!/usr/bin/python3|' install/bin/yt-upload install/bin/get-token
+          rm -rf install/yt_upload/__pycache__ install/get_token/__pycache__
+
+          # /usr/lib/python3/dist-packages statt eines eigenen PYTHONPATH-
+          # Verzeichnisses (wie im Dockerfile) - das ist bei einem .deb der
+          # Standard-Suchpfad von Debians System-Python, beide Packages sind
+          # damit ohne zusätzliche Umgebungsvariablen importierbar. get_token
+          # läuft hier (anders als im Dockerfile) als regulärer, per pip
+          # installierter Entry-Point statt als bare-copy-Skript - für ein
+          # .deb, das ohnehin das ganze Package installiert, unnötig, das
+          # nachzubilden.
+          mkdir -p pkgroot/usr/bin pkgroot/usr/lib/python3/dist-packages pkgroot/etc/yt-upload/conf.d
+          cp install/bin/yt-upload install/bin/get-token pkgroot/usr/bin/
+          chmod 755 pkgroot/usr/bin/yt-upload pkgroot/usr/bin/get-token
+          cp -r install/yt_upload pkgroot/usr/lib/python3/dist-packages/yt_upload
+          cp -r install/get_token pkgroot/usr/lib/python3/dist-packages/get_token
+          cp -r install/yt_upload-*.dist-info pkgroot/usr/lib/python3/dist-packages/
+          cp upload.conf.example pkgroot/etc/yt-upload/upload.conf
+
+      - name: .deb bauen
+        run: |
+          fpm -s dir -t deb -f \
+            -n yt-upload \
+            -v "$DEB_VERSION" \
+            -a all \
+            --license GPL-3.0 \
+            --maintainer "chaos7x" \
+            --description "Automatisierter YouTube Upload Workflow" \
+            --url "https://github.com/${{ github.repository }}" \
+            --depends python3 \
+            --depends python3-requests \
+            --depends ffmpeg \
+            --deb-recommends python3-inotify \
+            --config-files /etc/yt-upload/upload.conf \
+            -C pkgroot \
+            usr etc
+
+      - name: .deb als Release-Asset hochladen
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.build-and-push.outputs.version }}
+          files: "*.deb"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -155,6 +155,15 @@ Danach stehen die Befehle `yt-upload` und `get-token` systemweit zur Verfügung 
 
 Die Logdatei landet je nach Umgebung automatisch am sinnvollsten Ort (`/var/log/yt-upload/`, sofern beschreibbar und ein klassischer Syslog-Daemon läuft, sonst nur auf `stdout`/journald) - siehe `LOG_FILE`-Umgebungsvariable, falls ein fester Pfad gewünscht ist.
 
+### Alternative: Fertiges Debian-Paket (.deb)
+
+Jedes [GitHub Release](https://github.com/chaos7x/yt-upload/releases) enthält zusätzlich ein `yt-upload_<version>_all.deb` als Anhang - keine manuelle `pip`-Installation nötig, `apt`/`dpkg` löst die Abhängigkeiten (`python3-requests`, `ffmpeg`; `python3-inotify` als Empfehlung für den Dämon-Modus) automatisch mit auf:
+
+```bash
+wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload_<version>_all.deb
+apt install ./yt-upload_<version>_all.deb
+```
+
 ---
 
 ## 🐳 Docker-Image-Varianten
