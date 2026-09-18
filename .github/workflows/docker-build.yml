@@ -12,6 +12,14 @@ name: Docker Build
 # Python-Version, die die Scripte bricht, erst beim nächsten zufälligen PR
 # auffallen statt zeitnah. Debian/Alpine floaten ebenfalls innerhalb ihrer
 # Major-Version, profitieren also vom selben Mechanismus.
+#
+# Trivy-Scan (nicht blockierend, exit-code 0): apt-get upgrade/apk upgrade
+# in den Dockerfiles beheben nur, was der jeweilige Paketmanager patchen
+# kann - Python-Abhängigkeiten (requests/streamlink/inotify) laufen komplett
+# daran vorbei und sind auch nicht in dependabot.yml erfasst (die deckt nur
+# die Ecosysteme docker/github-actions ab, kein pip). Trivy scannt zusätzlich
+# diese Ebene sowie CVEs, für die es noch gar keinen Fix gibt - beides bleibt
+# sonst komplett unsichtbar.
 
 on:
   pull_request:
@@ -53,9 +61,20 @@ jobs:
           file: ${{ matrix.variant.dockerfile }}
           platforms: linux/amd64
           push: false
+          load: true
+          tags: ci-scan:${{ matrix.variant.name }}
           pull: true
           build-args: |
             VERSION=ci-${{ github.sha }}
             BUILD_DATE=${{ steps.date.outputs.date }}
           cache-from: type=gha,scope=${{ matrix.variant.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
+
+      - name: Trivy-Scan (${{ matrix.variant.name }}, nicht blockierend)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ci-scan:${{ matrix.variant.name }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
