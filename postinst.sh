@@ -16,4 +16,12 @@ if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
 fi
 
+echo ""
+echo "yt-upload wurde installiert, der systemd-Service ist aber noch NICHT aktiviert."
+echo "Bitte zuerst [paths] in /etc/yt-upload/upload.conf setzen und einmalig"
+echo "'get-token' ausfuehren, dann den Dienst manuell aktivieren und starten:"
+echo ""
+echo "    systemctl enable --now yt-upload"
+echo ""
+
 exit 0
