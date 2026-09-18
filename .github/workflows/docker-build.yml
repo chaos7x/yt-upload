@@ -4,13 +4,22 @@ name: Docker Build
 # pushen - reine Build-Validierung. docker-release.yml baut (und pusht nach
 # GHCR) nur bei Tag-Pushes bzw. manuell und deckt Dockerfile.pyimg gar nicht
 # ab - ohne diesen Workflow würde ein kaputtes Dockerfile erst beim nächsten
-# tatsächlichen Release aus fallen, nicht schon im PR.
+# tatsächlichen Release auffallen, nicht schon im PR.
+#
+# pull: true + wöchentlicher schedule-Trigger: Dockerfile.pyimg baut auf
+# python:3-slim (unversionierter, floatender Tag) - ohne erzwungenen Pull
+# und ohne regelmäßigen Lauf unabhängig von Code-Änderungen würde eine neue
+# Python-Version, die die Scripte bricht, erst beim nächsten zufälligen PR
+# auffallen statt zeitnah. Debian/Alpine floaten ebenfalls innerhalb ihrer
+# Major-Version, profitieren also vom selben Mechanismus.
 
 on:
   pull_request:
   push:
     branches:
       - main
+  schedule:
+    - cron: '0 6 * * 1'  # Jeden Montag 06:00 UTC
 
 jobs:
   build:
@@ -44,6 +53,7 @@ jobs:
           file: ${{ matrix.variant.dockerfile }}
           platforms: linux/amd64
           push: false
+          pull: true
           build-args: |
             VERSION=ci-${{ github.sha }}
             BUILD_DATE=${{ steps.date.outputs.date }}
