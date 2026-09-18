@@ -157,11 +157,11 @@ Die Logdatei landet je nach Umgebung automatisch am sinnvollsten Ort (`/var/log/
 
 ### Alternative: Fertiges Debian-Paket (.deb)
 
-Jedes [GitHub Release](https://github.com/chaos7x/yt-upload/releases) enthält zusätzlich ein `yt-upload_<version>_amd64.deb` als Anhang - keine manuelle `pip`-Installation nötig, `apt`/`dpkg` löst die Abhängigkeiten (`python3-requests`, `ffmpeg`; `python3-inotify` als Empfehlung für den Dämon-Modus) automatisch mit auf:
+Jedes [GitHub Release](https://github.com/chaos7x/yt-upload/releases) enthält zusätzlich ein `yt-upload_<version>_all.deb` als Anhang - keine manuelle `pip`-Installation nötig, `apt`/`dpkg` löst die Abhängigkeiten (`python3-requests`, `ffmpeg`; `python3-inotify` als Empfehlung für den Dämon-Modus) automatisch mit auf:
 
 ```bash
-wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload_<version>_amd64.deb
-apt install ./yt-upload_<version>_amd64.deb
+wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload_<version>_all.deb
+apt install ./yt-upload_<version>_all.deb
 ```
 
 ---

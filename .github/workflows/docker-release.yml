@@ -162,6 +162,7 @@ jobs:
           fpm -s dir -t deb -f \
             -n yt-upload \
             -v "$DEB_VERSION" \
+            -a all \
             --license GPL-3.0 \
             --maintainer "chaos7x" \
             --description "Automatisierter YouTube Upload Workflow" \
