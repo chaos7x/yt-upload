@@ -32,18 +32,6 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SEGMENT_TIME_SEC = 36000     # Maximum 10 Stunden pro Video vor automatischem Splitting
 CHUNK_UNIT_BYTES = 262144    # 256 KiB Basis-Einheit für Resumable Chunk Uploads (Zwingende YouTube API Vorgabe)
 
-# Dynamic Path Detection: Docker Container Mounts (/videos) vs. Bare-Metal Host
-IN_DIR = os.environ.get('IN_DIR', "/videos/in" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "in"))
-WORK_DIR = os.environ.get('WORK_DIR', "/videos/work" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "work"))
-DONE_DIR = os.environ.get('DONE_DIR', "/videos/done" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "done"))
-CORRUPT_DIR = os.environ.get('CORRUPT_DIR', "/videos/corrupt" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "corrupt"))
-# Für Dateien, bei denen bereits mind. ein Segment erfolgreich hochgeladen wurde, bevor ein Fehler auftrat.
-# Getrennt von CORRUPT_DIR, damit kein versehentlicher Doppel-Upload bereits hochgeladener Segmente droht.
-RETRY_DIR = os.environ.get('RETRY_DIR', "/videos/retry" if os.path.exists("/videos") else os.path.join(BASE_DIR, "videos", "retry"))
-
-DEBUG_MODE = os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1')
-os.environ['DEBUG'] = '1' if DEBUG_MODE else '0'
-
 
 def _is_dedicated_mount(path):
     """
@@ -63,6 +51,25 @@ def _is_dedicated_mount(path):
         return os.stat(path).st_dev != os.stat(parent).st_dev
     except OSError:
         return False
+
+
+# Dynamic Path Detection: Docker Container Mounts (/videos) vs. Bare-Metal Host.
+# _is_dedicated_mount() statt blosser Existenzpruefung, da das Dockerfile
+# /videos unconditional per `mkdir -p` anlegt - ohne echtes Volume wuerde die
+# App sonst faelschlich "Container-Modus" annehmen und in den fluechtigen
+# Container-Layer statt auf einen Bare-Metal-Pfad schreiben (derselbe Bug wie
+# bei /log, siehe _default_log_file()).
+_videos_mounted = _is_dedicated_mount("/videos")
+IN_DIR = os.environ.get('IN_DIR', "/videos/in" if _videos_mounted else os.path.join(BASE_DIR, "videos", "in"))
+WORK_DIR = os.environ.get('WORK_DIR', "/videos/work" if _videos_mounted else os.path.join(BASE_DIR, "videos", "work"))
+DONE_DIR = os.environ.get('DONE_DIR', "/videos/done" if _videos_mounted else os.path.join(BASE_DIR, "videos", "done"))
+CORRUPT_DIR = os.environ.get('CORRUPT_DIR', "/videos/corrupt" if _videos_mounted else os.path.join(BASE_DIR, "videos", "corrupt"))
+# Für Dateien, bei denen bereits mind. ein Segment erfolgreich hochgeladen wurde, bevor ein Fehler auftrat.
+# Getrennt von CORRUPT_DIR, damit kein versehentlicher Doppel-Upload bereits hochgeladener Segmente droht.
+RETRY_DIR = os.environ.get('RETRY_DIR', "/videos/retry" if _videos_mounted else os.path.join(BASE_DIR, "videos", "retry"))
+
+DEBUG_MODE = os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1')
+os.environ['DEBUG'] = '1' if DEBUG_MODE else '0'
 
 
 def _default_log_file():
