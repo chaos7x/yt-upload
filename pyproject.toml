@@ -28,7 +28,7 @@ get-token = "get_token.get_token:main"
 # sicher, dass pip nur das eigene Package installiert und requests nicht
 # zusätzlich von PyPI nachlädt.
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
