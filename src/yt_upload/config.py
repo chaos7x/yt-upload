@@ -45,14 +45,36 @@ DEBUG_MODE = os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1')
 os.environ['DEBUG'] = '1' if DEBUG_MODE else '0'
 
 
+def _is_dedicated_mount(path):
+    """
+    Prüft, ob path ein eigener Mountpoint ist (Docker-Volume/Bind-Mount) statt
+    nur ein gewöhnliches Verzeichnis, das das Dockerfile per `mkdir -p` fest
+    ins Image gebacken hat (z.B. /log, /videos) - eine reine Existenzprüfung
+    kann diese beiden Fälle nicht unterscheiden, da `mkdir -p` das Verzeichnis
+    auch ganz ohne jeden Mount anlegt (siehe Bug: /log-Logdatei wurde erzeugt,
+    obwohl kein Log-Volume mehr gemountet war). Vergleicht dazu die
+    Geräte-ID (st_dev) von path und seinem Elternverzeichnis: unterschiedliche
+    st_dev bedeutet, dass dort tatsächlich ein Volume/Bind-Mount eingehängt ist.
+    """
+    if not os.path.isdir(path):
+        return False
+    parent = os.path.dirname(path.rstrip("/")) or "/"
+    try:
+        return os.stat(path).st_dev != os.stat(parent).st_dev
+    except OSError:
+        return False
+
+
 def _default_log_file():
     """
     Ermittelt den Standard-Logpfad:
-    1. /log/upload.log, falls /log existiert (übliche Docker-Volume-Konvention)
+    1. /log/upload.log, falls /log als eigenes Docker-Volume gemountet ist
+       (nicht nur als vom Dockerfile angelegtes Verzeichnis vorhanden, siehe
+       _is_dedicated_mount())
     2. /var/log/yt-upload/yt-upload.log, falls beschreibbar (FHS-Standard für Bare-Metal-Daemons)
     3. BASE_DIR/upload.log als letzter Fallback (z.B. lokales Testen ohne Root-Rechte)
     """
-    if os.path.exists("/log"):
+    if _is_dedicated_mount("/log"):
         return "/log/upload.log"
 
     var_log_dir = "/var/log/yt-upload"

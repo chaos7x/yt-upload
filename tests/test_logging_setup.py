@@ -84,21 +84,63 @@ class TestIsSyslogDaemonRunning:
         assert logging_setup.is_syslog_daemon_running() is True
 
 
+class TestIsDedicatedMount:
+    """
+    Testet _is_dedicated_mount() (config.py) - unterscheidet ein echtes
+    Docker-Volume/Bind-Mount von einem gewöhnlichen, per `mkdir -p` fest ins
+    Image gebackenen Verzeichnis (z.B. /log, /videos), das ohne diese
+    Unterscheidung fälschlich als "gemountet" durchgehen würde.
+    """
+
+    def test_returns_false_if_path_does_not_exist(self, config, monkeypatch):
+        monkeypatch.setattr(config.os.path, "isdir", lambda p: False)
+        assert config._is_dedicated_mount("/log") is False
+
+    def test_returns_false_for_plain_baked_in_directory_same_device(self, config, monkeypatch):
+        """Gleiche st_dev wie das Elternverzeichnis = kein echter Mount, nur ein normaler Ordner."""
+        monkeypatch.setattr(config.os.path, "isdir", lambda p: True)
+
+        class FakeStat:
+            def __init__(self, st_dev):
+                self.st_dev = st_dev
+
+        monkeypatch.setattr(config.os, "stat", lambda p: FakeStat(st_dev=1))
+
+        assert config._is_dedicated_mount("/log") is False
+
+    def test_returns_true_for_real_mount_different_device(self, config, monkeypatch):
+        """Unterschiedliche st_dev zum Elternverzeichnis = tatsächlich eingehängtes Volume/Bind-Mount."""
+        monkeypatch.setattr(config.os.path, "isdir", lambda p: True)
+
+        class FakeStat:
+            def __init__(self, st_dev):
+                self.st_dev = st_dev
+
+        def fake_stat(p):
+            return FakeStat(st_dev=2) if p == "/log" else FakeStat(st_dev=1)
+
+        monkeypatch.setattr(config.os, "stat", fake_stat)
+
+        assert config._is_dedicated_mount("/log") is True
+
+    def test_permission_error_on_stat_returns_false(self, config, monkeypatch):
+        monkeypatch.setattr(config.os.path, "isdir", lambda p: True)
+
+        def raise_oserror(p):
+            raise OSError("Permission denied")
+
+        monkeypatch.setattr(config.os, "stat", raise_oserror)
+
+        assert config._is_dedicated_mount("/log") is False
+
+
 class TestDefaultLogFile:
-    def test_prefers_log_dir_if_it_exists(self, config, monkeypatch):
-        real_exists = config.os.path.exists
-        monkeypatch.setattr(
-            config.os.path, "exists",
-            lambda p: True if p == "/log" else real_exists(p)
-        )
+    def test_prefers_log_dir_if_dedicated_mount(self, config, monkeypatch):
+        monkeypatch.setattr(config, "_is_dedicated_mount", lambda p: p == "/log")
         assert config._default_log_file() == "/log/upload.log"
 
     def test_falls_back_to_var_log_if_writable(self, config, monkeypatch):
-        real_exists = config.os.path.exists
-        monkeypatch.setattr(
-            config.os.path, "exists",
-            lambda p: False if p == "/log" else real_exists(p)
-        )
+        monkeypatch.setattr(config, "_is_dedicated_mount", lambda p: False)
         monkeypatch.setattr(config.os, "makedirs", lambda *a, **k: None)
         monkeypatch.setattr(config.os, "access", lambda *a, **k: True)
 
@@ -106,11 +148,7 @@ class TestDefaultLogFile:
         assert config._default_log_file() == expected
 
     def test_final_fallback_to_base_dir_if_var_log_unwritable(self, config, monkeypatch):
-        real_exists = config.os.path.exists
-        monkeypatch.setattr(
-            config.os.path, "exists",
-            lambda p: False if p == "/log" else real_exists(p)
-        )
+        monkeypatch.setattr(config, "_is_dedicated_mount", lambda p: False)
 
         def raise_oserror(*a, **k):
             raise OSError("Permission denied")
@@ -119,3 +157,49 @@ class TestDefaultLogFile:
 
         expected = os.path.join(config.BASE_DIR, "upload.log")
         assert config._default_log_file() == expected
+
+
+class TestSetupLoggingFileTrigger:
+    """
+    Deckt den eigentlich gemeldeten Bug ab: ohne echtes /log-Volume (nur das
+    vom Dockerfile fest angelegte Verzeichnis) darf setup_logging() KEINEN
+    RotatingFileHandler mehr aktivieren.
+    """
+
+    def _capture_handlers(self, logging_setup, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(logging_setup.logging, "basicConfig", lambda **kwargs: captured.update(kwargs))
+        return captured
+
+    def test_plain_baked_in_log_dir_without_real_mount_stays_stdout_only(self, logging_setup, config, monkeypatch):
+        monkeypatch.setattr(config, "_is_dedicated_mount", lambda p: False)
+        monkeypatch.setattr(config, "LOG_FILE_EXPLICIT", False)
+        monkeypatch.setattr(logging_setup, "is_syslog_daemon_running", lambda: False)
+        captured = self._capture_handlers(logging_setup, monkeypatch)
+
+        logging_setup.setup_logging()
+
+        assert len(captured["handlers"]) == 1
+        assert isinstance(captured["handlers"][0], logging_setup.logging.StreamHandler)
+
+    def test_real_log_volume_mount_adds_file_handler(self, logging_setup, config, monkeypatch, tmp_path):
+        monkeypatch.setattr(config, "_is_dedicated_mount", lambda p: True)
+        monkeypatch.setattr(config, "LOG_FILE_EXPLICIT", False)
+        monkeypatch.setattr(config, "LOG_FILE", str(tmp_path / "upload.log"))
+        monkeypatch.setattr(logging_setup, "is_syslog_daemon_running", lambda: False)
+        captured = self._capture_handlers(logging_setup, monkeypatch)
+
+        logging_setup.setup_logging()
+
+        assert len(captured["handlers"]) == 2
+
+    def test_explicit_log_file_config_adds_file_handler_even_without_mount(self, logging_setup, config, monkeypatch, tmp_path):
+        monkeypatch.setattr(config, "_is_dedicated_mount", lambda p: False)
+        monkeypatch.setattr(config, "LOG_FILE_EXPLICIT", True)
+        monkeypatch.setattr(config, "LOG_FILE", str(tmp_path / "upload.log"))
+        monkeypatch.setattr(logging_setup, "is_syslog_daemon_running", lambda: False)
+        captured = self._capture_handlers(logging_setup, monkeypatch)
+
+        logging_setup.setup_logging()
+
+        assert len(captured["handlers"]) == 2
