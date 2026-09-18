@@ -118,11 +118,15 @@ class TestChunkUploadSuccess:
         assert fake_session.put_headers_seen[0]["Content-Range"] == "bytes 0-262143/300000"
         assert fake_session.put_headers_seen[1]["Content-Range"] == "bytes 262144-299999/300000"
 
-    def test_interactive_tty_shows_progress_bar_instead_of_log_line(self, youtube_api, monkeypatch, large_video_file, capsys, caplog):
+    def test_interactive_tty_shows_both_progress_bar_and_log_line(self, youtube_api, monkeypatch, large_video_file, capsys, caplog):
         """
-        Bei interaktivem stderr (echtes Terminal) übernimmt der Live-Balken die
-        Fortschrittsanzeige - die sonst übliche "Fortschritt: ..."-Logzeile
-        entfällt dafür, um doppelte/widersprüchliche Ausgaben zu vermeiden.
+        Bei interaktivem stderr (echtes Terminal) läuft zusätzlich zur
+        "Fortschritt: ..."-Logzeile der Live-Balken mit. Die Logzeile darf NICHT
+        entfallen, nur weil isatty() True liefert - Container mit `tty: true`
+        (z.B. für Podman-Kompatibilität gesetzt) melden isatty()=True auch im
+        unbeaufsichtigten Daemon-Betrieb, wo der \\r-Balken (schreibt direkt auf
+        stderr, nie über den Logger) sonst der einzige Fortschrittsindikator
+        wäre und in `docker logs` nie auftauchen würde.
         """
         monkeypatch.setattr(youtube_api.sys.stderr, "isatty", lambda: True)
         init_response = FakeResponse(200, headers={"Location": "https://fake/session-tty"})
@@ -139,7 +143,7 @@ class TestChunkUploadSuccess:
             )
 
         assert result == "vid_tty"
-        assert not any("Fortschritt:" in record.message for record in caplog.records)
+        assert any("Fortschritt:" in record.message for record in caplog.records)
         stderr_output = capsys.readouterr().err
         assert "%" in stderr_output
         assert "100.0%" in stderr_output
