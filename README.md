@@ -164,6 +164,12 @@ wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload_<ve
 apt install ./yt-upload_<version>_all.deb
 ```
 
+Das Paket legt einen dedizierten Systemuser (`yt-upload`) und einen systemd-Service für den Dämon-Modus an (`yt-upload -D`), startet ihn aber bewusst nicht automatisch. Da `IN_DIR`/`WORK_DIR`/etc. ohne ein `/videos`-Volume (wie im Docker-Setup) nicht automatisch erkannt werden, zuerst `[paths]` in `/etc/yt-upload/upload.conf` setzen, `get-token` einmalig manuell ausführen (kein Service, siehe oben), dann:
+
+```bash
+systemctl enable --now yt-upload
+```
+
 ### Alternative: Standalone .pyz (kein pip/apt nötig)
 
 `./build-pyz.sh` baut aus `src/` je ein selbst-enthaltenes `.pyz` pro Eintrag in `[project.scripts]` (`yt-upload.pyz` und `get-token.pyz`) samt `requests` und optional `inotify` - läuft auf jedem System mit einem nackten `python3`, ganz ohne vorherige `pip install`/`apt install`:

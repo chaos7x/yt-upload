@@ -1,0 +1,16 @@
+[Unit]
+Description=yt-upload - Automatisierter YouTube Upload Workflow
+Documentation=https://github.com/chaos7x/yt-upload
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yt-upload
+Group=yt-upload
+ExecStart=/usr/bin/yt-upload -D
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

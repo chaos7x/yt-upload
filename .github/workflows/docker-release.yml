@@ -164,13 +164,14 @@ jobs:
           # installierter Entry-Point statt als bare-copy-Skript - für ein
           # .deb, das ohnehin das ganze Package installiert, unnötig, das
           # nachzubilden.
-          mkdir -p pkgroot/usr/bin pkgroot/usr/lib/python3/dist-packages pkgroot/etc/yt-upload/conf.d
+          mkdir -p pkgroot/usr/bin pkgroot/usr/lib/python3/dist-packages pkgroot/etc/yt-upload/conf.d pkgroot/usr/lib/systemd/system
           cp install/bin/yt-upload install/bin/get-token pkgroot/usr/bin/
           chmod 755 pkgroot/usr/bin/yt-upload pkgroot/usr/bin/get-token
           cp -r install/yt_upload pkgroot/usr/lib/python3/dist-packages/yt_upload
           cp -r install/get_token pkgroot/usr/lib/python3/dist-packages/get_token
           cp -r install/yt_upload-*.dist-info pkgroot/usr/lib/python3/dist-packages/
           cp upload.conf.example pkgroot/etc/yt-upload/upload.conf
+          cp yt-upload.service pkgroot/usr/lib/systemd/system/yt-upload.service
 
       - name: .deb bauen
         run: |
@@ -185,8 +186,12 @@ jobs:
             --depends python3 \
             --depends python3-requests \
             --depends ffmpeg \
+            --depends adduser \
             --deb-recommends python3-inotify \
             --config-files /etc/yt-upload/upload.conf \
+            --after-install postinst.sh \
+            --before-remove prerm.sh \
+            --after-remove postrm.sh \
             -C pkgroot \
             usr etc
 
