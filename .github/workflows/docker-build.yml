@@ -14,12 +14,18 @@ name: Docker Build
 # Major-Version, profitieren also vom selben Mechanismus.
 #
 # Trivy-Scan (nicht blockierend, exit-code 0): apt-get upgrade/apk upgrade
-# in den Dockerfiles beheben nur, was der jeweilige Paketmanager patchen
-# kann - Python-Abhängigkeiten (requests/streamlink/inotify) laufen komplett
-# daran vorbei und sind auch nicht in dependabot.yml erfasst (die deckt nur
-# die Ecosysteme docker/github-actions ab, kein pip). Trivy scannt zusätzlich
-# diese Ebene sowie CVEs, für die es noch gar keinen Fix gibt - beides bleibt
-# sonst komplett unsichtbar.
+# patchen nur, was der jeweilige Paketmanager kennt. Unter Debian kommen
+# requests/inotify über die apt-Pakete python3-requests/python3-inotify
+# (siehe Dockerfile) und sind damit bereits durch apt-get upgrade + Trivys
+# Debian-Scan abgedeckt - kein pip-Fall. Unter Alpine/pyimg dagegen laufen
+# sie bewusst per pip (kein apk-Äquivalent bzw. Alpines py3-inotify packt
+# ein anderes, unpassendes Projekt), teils ohne Versionspin direkt im
+# Dockerfile - dafür gibt es keine von Dependabot lesbare Manifestdatei
+# (weder pip- noch irgendein anderes Ecosystem sieht eine nackte
+# `RUN pip install`-Zeile), es wird bei jedem Build einfach die aktuell
+# neueste Version gezogen. Trivy ist hier die einzige Stelle, die zeigt,
+# welche Version das tatsächlich war und ob sie bekannte (auch noch
+# ungefixte) CVEs hat.
 
 on:
   pull_request:
