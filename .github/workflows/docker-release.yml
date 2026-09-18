@@ -87,7 +87,7 @@ jobs:
           echo "LATEST_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.suffix }}" >> $GITHUB_ENV
 
       - name: Build und Push Docker Image (Multi-Arch)
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           file: ${{ matrix.dockerfile }}
