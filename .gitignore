@@ -3,30 +3,36 @@ log/
 videos/
 oauth/
 app/
+config/
 
-#Github Zeug
+# Lokale Tooling-Konfiguration ausschließen
 .github/agents/
 
 # Backup- und Sicherungsdateien ausschließen
 *.sav
 *.bak
-client_secrets.json
-youtube-upload-credentials.json
-.secrets
 *.new
-*.log
 *.diff
+*.patch
+*.log
+
 # Python Bytecode und Cache ausschließen
 __pycache__/
 *.pyc
+
+# Docker-Compose-Override und lokale Compose-Datei ausschließen
 docker-compose.override.yaml
-
-# Environminet Datei ausschließen
-.env
-
 docker-compose.yaml
+
+# Environment- und Secrets-Dateien ausschließen
+.env
+.secrets
 
 build/
 dist/
 src/*.egg-info/
 *.pyz
+
+# Repo-spezifisch: YouTube-Credentials
+client_secrets.json
+youtube-upload-credentials.json

@@ -35,10 +35,6 @@ CI (`.github/workflows/ci.yml`) runs `pytest -v` then `ruff check src/yt_upload/
 
 `ruff check` covers `src/yt_upload/` and `src/get_token/` (matches CI). `tests/` is not part of that convention and may carry pre-existing, separately-tracked lint issues — don't be surprised if `ruff check .` (whole repo) turns up things outside the scope of whatever you're working on.
 
-### `tests/` is gitignored but tracked
-
-`.gitignore` has a blanket `tests/` rule, but the existing test files were committed before that rule existed, so `git add` on a *new* test file needs `git add -f` or it silently won't stage.
-
 ## Architecture
 
 Two independently installable packages live under `src/`, both wired into `[project.scripts]` in `pyproject.toml`:
