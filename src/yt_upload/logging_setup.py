@@ -36,21 +36,23 @@ def setup_logging():
     Initialisiert das Root-Logging:
     - stdout-Handler: immer aktiv, wird von journald/docker logs erfasst.
     - RotatingFileHandler: zusätzlich, ausgelöst durch (a) explizite LOG_FILE-
-      Konfiguration (Config oder ENV), (b) ein vorhandenes /log-Verzeichnis
-      (Docker-Volume-Konvention), oder (c) einen tatsächlich laufenden
+      Konfiguration (Config oder ENV), (b) ein tatsächlich als Docker-Volume
+      gemountetes /log-Verzeichnis (siehe config._is_dedicated_mount() - eine
+      reine Existenzprüfung reicht nicht, da das Dockerfile /log auch ganz
+      ohne Mount fest ins Image anlegt), oder (c) einen tatsächlich laufenden
       klassischen Syslog-Daemon (rsyslog, syslog-ng, syslogd) auf
       Bare-Metal-/systemd-Systemen. Ohne einen dieser Gründe ist die eigene
       Logdatei nur eine unnötige zweite Datenhaltung neben dem Journal.
     """
     log_handlers = [logging.StreamHandler(sys.stdout)]
-    docker_log_dir_present = os.path.isdir("/log")
+    docker_log_volume_mounted = config._is_dedicated_mount("/log")
     syslog_detected = is_syslog_daemon_running()
     file_log_error = None
 
     if config.LOG_FILE_EXPLICIT:
         trigger_reason = "explizite LOG_FILE-Konfiguration"
-    elif docker_log_dir_present:
-        trigger_reason = "/log-Verzeichnis gefunden (Docker-Volume-Konvention)"
+    elif docker_log_volume_mounted:
+        trigger_reason = "/log als Docker-Volume gemountet"
     elif syslog_detected:
         trigger_reason = "Syslog-Daemon erkannt"
     else:
