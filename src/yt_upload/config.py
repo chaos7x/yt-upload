@@ -217,7 +217,16 @@ def load_configuration(log_changes=False):
 
     # --- Step 1: Config-Dateien verarbeiten ---
     if config_files:
-        config.read(config_files, encoding='utf-8')
+        try:
+            config.read(config_files, encoding='utf-8')
+        except (OSError, configparser.Error, UnicodeDecodeError) as e:
+            # Fail-fast statt eines uncaught ParsingError, der den ganzen
+            # Dämon abstürzen ließe (z.B. bei einer Zeile ohne "=", einem
+            # doppelten Abschnitt oder einer kaputten Zeichenkodierung) -
+            # die untenstehenden config.get(fallback=...)-Aufrufe bleiben
+            # dann einfach bei ihren aktuellen Werten (Alt-Config bzw.
+            # Hardcoded-Defaults beim allerersten Laden).
+            logger.warning(f"Fehler beim Lesen der Config-Dateien: {e}")
 
         # Sektion [paths] einlesen
         if 'paths' in config:
