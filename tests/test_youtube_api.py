@@ -272,3 +272,41 @@ class TestAddVideoToPlaylist:
 
         assert result is False
         assert len(fake_post.calls) == 3
+
+
+class TestUploadProgressBar:
+    """
+    Reine Logik-Tests fuer den Live-Fortschrittsbalken (siehe youtube_api.py,
+    Vorbild tokland/youtube-upload's progressbar2-Widget). Die Integration in
+    upload_single_video() (isatty-Gating) wird separat in
+    test_chunk_upload_retry.py mitgetestet, da dafuer der volle Chunk-Upload-
+    Mock-Aufbau gebraucht wird.
+    """
+
+    def test_update_writes_percentage_and_speed_to_stderr(self, youtube_api, capsys):
+        bar = youtube_api._UploadProgressBar(total_bytes=1000)
+
+        bar.update(500)
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "50.0%" in captured.err
+        assert "MB/s" in captured.err
+        assert captured.err.startswith("\r")
+
+    def test_finish_completes_bar_and_appends_newline(self, youtube_api, capsys):
+        bar = youtube_api._UploadProgressBar(total_bytes=1000)
+
+        bar.finish()
+
+        captured = capsys.readouterr()
+        assert "100.0%" in captured.err
+        assert captured.err.endswith("\n")
+
+    def test_zero_total_bytes_does_not_raise(self, youtube_api, capsys):
+        bar = youtube_api._UploadProgressBar(total_bytes=0)
+
+        bar.update(0)
+
+        captured = capsys.readouterr()
+        assert "100.0%" in captured.err

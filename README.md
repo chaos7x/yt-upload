@@ -315,7 +315,7 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
   Name der Ziel-Playlist (wird automatisch erstellt, falls nicht vorhanden).
 
 * `--chunksize` `BYTES`
-  Chunk-Größe für Resumable Uploads in Bytes (Standard: `268435456` = 256 MiB, auf ein Vielfaches von 256 KiB gerundet - zwingende Vorgabe der YouTube API).
+  Chunk-Größe für Resumable Uploads in Bytes (Standard: `268435456` = 256 MiB, auf ein Vielfaches von 256 KiB gerundet - zwingende Vorgabe der YouTube API). Läuft `yt-upload` interaktiv in einem echten Terminal, zeigt sich pro Chunk-Grenze ein Live-Fortschrittsbalken (Prozent, Transferrate, ETA) auf stderr statt der sonst üblichen Logzeile - für einen glatteren Balken kleinere Werte wählen. Im Dämon-/Container-Betrieb (kein TTY) bleibt es bei der Logzeile.
 
 * `--open-link`
   Öffnet nach erfolgreichem Upload die Video-URL im Standardbrowser.

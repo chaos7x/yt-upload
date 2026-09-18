@@ -118,6 +118,32 @@ class TestChunkUploadSuccess:
         assert fake_session.put_headers_seen[0]["Content-Range"] == "bytes 0-262143/300000"
         assert fake_session.put_headers_seen[1]["Content-Range"] == "bytes 262144-299999/300000"
 
+    def test_interactive_tty_shows_progress_bar_instead_of_log_line(self, youtube_api, monkeypatch, large_video_file, capsys, caplog):
+        """
+        Bei interaktivem stderr (echtes Terminal) übernimmt der Live-Balken die
+        Fortschrittsanzeige - die sonst übliche "Fortschritt: ..."-Logzeile
+        entfällt dafür, um doppelte/widersprüchliche Ausgaben zu vermeiden.
+        """
+        monkeypatch.setattr(youtube_api.sys.stderr, "isatty", lambda: True)
+        init_response = FakeResponse(200, headers={"Location": "https://fake/session-tty"})
+        put_308 = FakeResponse(308, headers={"Range": "bytes=0-262143"})
+        put_200 = FakeResponse(200, json_data={"id": "vid_tty"})
+        fake_session = FakeSession(init_response, [put_308, put_200])
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        with caplog.at_level("INFO"):
+            result = youtube_api.upload_single_video(
+                file_path=large_video_file, title="Test", desc="", category=None, tags=None,
+                rec_date=None, thumb_path=None, playlist_name=None,
+                chunksize=262144
+            )
+
+        assert result == "vid_tty"
+        assert not any("Fortschritt:" in record.message for record in caplog.records)
+        stderr_output = capsys.readouterr().err
+        assert "%" in stderr_output
+        assert "100.0%" in stderr_output
+
 
 class TestChunkUploadTokenRefresh:
     def test_401_triggers_refresh_and_retries_successfully(self, youtube_api, monkeypatch, video_file):

@@ -6,6 +6,7 @@ REST-API, kein google-api-python-client) und Playlist-Zuweisung.
 import json
 import logging
 import os
+import sys
 import time
 import webbrowser
 
@@ -81,6 +82,48 @@ def get_access_token(cred_file=None, client_secrets_file=None):
 
 class PermanentUploadError(RuntimeError):
     """Wird bei dauerhaften (nicht behebbaren) API-Fehlern ausgelöst, um sinnloses Retrying zu vermeiden."""
+
+
+class _UploadProgressBar:
+    """
+    Live-Fortschrittsbalken auf stderr fuer interaktive Uploads (Vorbild:
+    tokland/youtube-upload's progressbar2-Widget aus Percentage/Bar/
+    FileTransferSpeed/DataSize/ETA). Bewusst ohne die zusaetzliche
+    progressbar2-Dependency von Hand nachgebaut - dieses Projekt haelt sich
+    schon bei inotify/requests bewusst an minimale, per apt/apk statt PyPI
+    installierbare Abhaengigkeiten, und fuer eine reine Terminal-Optik lohnt
+    sich das Docker-Paketierungs-Gedoens (3 Dockerfile-Varianten + Bare-Metal)
+    nicht. Aktualisiert sich nur bei Chunk-Grenzen (siehe --chunksize) - fuer
+    einen glatteren Balken kleinere Chunksize waehlen.
+    """
+
+    BAR_WIDTH = 30
+
+    def __init__(self, total_bytes):
+        self.total_bytes = total_bytes
+        self.start_time = time.monotonic()
+
+    def update(self, uploaded_bytes):
+        elapsed = max(time.monotonic() - self.start_time, 0.001)
+        speed = uploaded_bytes / elapsed
+        pct = min(uploaded_bytes / self.total_bytes, 1.0) if self.total_bytes else 1.0
+        filled = int(self.BAR_WIDTH * pct)
+        bar = "#" * filled + "-" * (self.BAR_WIDTH - filled)
+        remaining_bytes = max(self.total_bytes - uploaded_bytes, 0)
+        eta_sec = int(remaining_bytes / speed) if speed > 0 else 0
+        eta = time.strftime("%H:%M:%S", time.gmtime(eta_sec))
+        sys.stderr.write(
+            f"\r[{bar}] {pct * 100:5.1f}% "
+            f"{speed / (1024 * 1024):6.2f} MB/s "
+            f"{uploaded_bytes / (1024 * 1024):8.1f}/{self.total_bytes / (1024 * 1024):.1f} MB "
+            f"ETA {eta}"
+        )
+        sys.stderr.flush()
+
+    def finish(self):
+        self.update(self.total_bytes)
+        sys.stderr.write("\n")
+        sys.stderr.flush()
 
 
 def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.VIDEO_PRIVACY,
@@ -372,6 +415,7 @@ def upload_single_video(
     max_retries = 5
     video_id = None
     uploaded_bytes = 0
+    progress_bar = _UploadProgressBar(file_size) if sys.stderr.isatty() else None
 
     # 2. Datei in Chunks unterteilt übertragen
     with open(file_path, "rb") as f:
@@ -400,6 +444,8 @@ def upload_single_video(
                         uploaded_bytes = file_size
                         chunk_success = True
                         write_heartbeat()
+                        if progress_bar:
+                            progress_bar.finish()
                         logger.info(f"Upload ERFOLGREICH abgeschlossen! Video-ID: {video_id}")
                         break
 
@@ -418,8 +464,11 @@ def upload_single_video(
                             uploaded_bytes = (uploaded_bytes // config.CHUNK_UNIT_BYTES) * config.CHUNK_UNIT_BYTES
                             logger.warning(f"Offset korrigiert auf 256-KiB-Grenze: {uploaded_bytes} Bytes")
 
-                        pct = (uploaded_bytes / file_size) * 100
-                        logger.info(f"Fortschritt: {uploaded_bytes / (1024 * 1024):.1f} / {file_size / (1024 * 1024):.1f} MB ({pct:.1f}%)")
+                        if progress_bar:
+                            progress_bar.update(uploaded_bytes)
+                        else:
+                            pct = (uploaded_bytes / file_size) * 100
+                            logger.info(f"Fortschritt: {uploaded_bytes / (1024 * 1024):.1f} / {file_size / (1024 * 1024):.1f} MB ({pct:.1f}%)")
                         chunk_success = True
                         write_heartbeat()
                         break
