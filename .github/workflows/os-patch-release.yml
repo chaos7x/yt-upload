@@ -1,0 +1,99 @@
+name: Automated OS-Patch Release
+
+# Prueft monatlich per Trockenlauf (apt-get upgrade -s / apk upgrade -s
+# gegen ein frisches debian:trixie-slim/alpine:3, unabhaengig vom
+# eigentlichen Dockerfile-Build), ob im Basis-Image ungenutzte
+# Security-Patches liegen. docker-refresh.yml haelt zwar `latest`
+# woechentlich aktuell, aber die fixen vX.Y.Z-Tags frieren fuer immer
+# auf ihrem Build-Zeitpunkt ein - wer die pinnt, bekommt diese Patches
+# nie. Falls der Trockenlauf etwas findet: haengt eine vierte
+# Versionsstelle an den letzten Tag an (vX.Y.Z -> vX.Y.Z.1, danach
+# vX.Y.Z.2, ...) und pusht Version+Tag - das triggert docker-release.yml
+# wie jeden anderen Tag-Push (baut, published nach GHCR, erstellt das
+# GitHub-Release ganz normal mit).
+#
+# Die vierte Stelle ist ausschliesslich fuer diese rein OS-Patch-
+# getriebenen Releases reserviert (siehe README.md, Abschnitt
+# "Versionierung"): der naechste echte Code-Release laesst sie einfach
+# weg statt sie fortzusetzen. docker-release.yml's bestehende
+# Auto-Increment-Logik kappt eine vorhandene vierte Stelle beim
+# Patch-Hochzaehlen bereits automatisch (sie liest nur die fuehrenden
+# Ziffern des dritten Versionsteils).
+#
+# Findet der Trockenlauf nichts zu patchen, bricht der Job ohne
+# Versionsbump/Tag/Release ab - kein Rauschen in der Release-Historie.
+
+on:
+  schedule:
+    - cron: '0 8 1 * *'  # 1. jeden Monats, 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Debian-Basis-Image auf verfuegbare Patches pruefen
+        id: check-debian
+        run: |
+          OUTPUT=$(docker run --rm debian:trixie-slim bash -c "apt-get update -qq && apt-get upgrade -s")
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -qE "^0 upgraded, 0 newly installed"; then
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_updates=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Alpine-Basis-Image auf verfuegbare Patches pruefen
+        id: check-alpine
+        run: |
+          OUTPUT=$(docker run --rm alpine:3 sh -c "apk update -q && apk upgrade --simulate")
+          echo "$OUTPUT"
+          COUNT=$(echo "$OUTPUT" | grep -c "Upgrading" || true)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_updates=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Naechste Patch-Version berechnen
+        id: bump
+        if: steps.check-debian.outputs.has_updates == 'true' || steps.check-alpine.outputs.has_updates == 'true'
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0)
+          CLEAN_TAG="${LATEST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR REST <<< "$CLEAN_TAG"
+          PATCH=$(echo "$REST" | cut -d. -f1)
+          OSPATCH=$(echo "$REST" | cut -d. -f2 -s)
+          if [ -z "$OSPATCH" ]; then
+            OSPATCH=1
+          else
+            OSPATCH=$((OSPATCH + 1))
+          fi
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}.${OSPATCH}"
+          echo "Letzter Tag: $LATEST_TAG -> neuer OS-Patch-Tag: v${NEW_VERSION}"
+          echo "new_tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: pyproject.toml aktualisieren, committen und taggen
+        if: steps.check-debian.outputs.has_updates == 'true' || steps.check-alpine.outputs.has_updates == 'true'
+        run: |
+          sed -i "s/^version = \".*\"/version = \"${{ steps.bump.outputs.new_version }}\"/" pyproject.toml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          git commit -m "Automated OS-patch release ${{ steps.bump.outputs.new_tag }}"
+          git tag "${{ steps.bump.outputs.new_tag }}"
+          git push origin HEAD:main
+          git push origin "${{ steps.bump.outputs.new_tag }}"
+
+      - name: Kein Patch noetig
+        if: steps.check-debian.outputs.has_updates != 'true' && steps.check-alpine.outputs.has_updates != 'true'
+        run: echo "Keine ausstehenden OS-Patches im Basis-Image gefunden - kein Release noetig."
