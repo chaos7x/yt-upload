@@ -164,6 +164,16 @@ wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload_<ve
 apt install ./yt-upload_<version>_all.deb
 ```
 
+### Alternative: Standalone .pyz (kein pip/apt nötig)
+
+`./build-pyz.sh` baut aus `src/` je ein selbst-enthaltenes `.pyz` pro Eintrag in `[project.scripts]` (`yt-upload.pyz` und `get-token.pyz`) samt `requests` und optional `inotify` - läuft auf jedem System mit einem nackten `python3`, ganz ohne vorherige `pip install`/`apt install`:
+
+```bash
+./build-pyz.sh
+./yt-upload.pyz --version
+./get-token.pyz
+```
+
 ---
 
 ## 🐳 Docker-Image-Varianten
