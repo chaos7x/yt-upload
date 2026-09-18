@@ -464,11 +464,17 @@ def upload_single_video(
                             uploaded_bytes = (uploaded_bytes // config.CHUNK_UNIT_BYTES) * config.CHUNK_UNIT_BYTES
                             logger.warning(f"Offset korrigiert auf 256-KiB-Grenze: {uploaded_bytes} Bytes")
 
+                        # Fortschritt IMMER auch als Log-Zeile ausgeben, nicht nur wenn kein
+                        # Live-Balken aktiv ist: sys.stderr.isatty() liefert in Containern mit
+                        # `tty: true` (z.B. fuer Podman-Kompatibilitaet gesetzt) auch im
+                        # unbeaufsichtigten Daemon-Betrieb True, wodurch bislang ausschliesslich
+                        # der Live-Balken lief - der schreibt per \r direkt auf stderr, landet
+                        # also nie im Logger/in `docker logs`-Historie, und macht den Fortschritt
+                        # bei einem spaeteren Blick ins Log unsichtbar.
+                        pct = (uploaded_bytes / file_size) * 100
+                        logger.info(f"Fortschritt: {uploaded_bytes / (1024 * 1024):.1f} / {file_size / (1024 * 1024):.1f} MB ({pct:.1f}%)")
                         if progress_bar:
                             progress_bar.update(uploaded_bytes)
-                        else:
-                            pct = (uploaded_bytes / file_size) * 100
-                            logger.info(f"Fortschritt: {uploaded_bytes / (1024 * 1024):.1f} / {file_size / (1024 * 1024):.1f} MB ({pct:.1f}%)")
                         chunk_success = True
                         write_heartbeat()
                         break
