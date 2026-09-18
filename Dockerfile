@@ -47,10 +47,17 @@ COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
 # ------------------------------------------
 # LAYER 2: System-Pakete & Python-Bibliotheken in EINEM Rutsch installieren + Aufräumen
 # ------------------------------------------
-# Installiert Python 3, requests, inotify, ExifTool, Midnight Commander (mc) 
+# Installiert Python 3, requests, inotify, ExifTool, Midnight Commander (mc)
 # sowie ca-certificates direkt über den Paketmanager. Bewusst OHNE pip/
 # setuptools - die werden nur im Builder (STUFE 1) gebraucht.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade: das Base-Image selbst (Pakete wie gzip/perl-base/libssl3/
+# libsqlite3/libpcre2, die nicht über unsere eigenen apt-get-install-Zeilen
+# kommen) hinkt Debians eigenen Security-Patches oft ein paar Tage hinterher,
+# bis die Docker-Official-Images-Pipeline es neu baut - ein simples `docker
+# pull` holt dann weiterhin die alte, unpatchte Version. apt-get upgrade
+# zieht stattdessen bei jedem Build die aktuell in Debians eigenen Repos
+# verfügbaren Paketversionen, unabhängig vom Alter des Base-Images selbst.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     python3 \
     python3-requests \
     python3-inotify \

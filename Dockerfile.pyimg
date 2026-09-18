@@ -41,7 +41,12 @@ COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
 # Installiert ExifTool, Midnight Commander (mc)
 # sowie ca-certificates direkt über den Paketmanager. Bewusst OHNE pip/
 # setuptools - die werden nur im Builder (STUFE 1) gebraucht.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade: das Base-Image selbst hinkt Debians eigenen Security-
+# Patches oft ein paar Tage hinterher, bis die Docker-Official-Images-
+# Pipeline es neu baut - ein simples `docker pull` holt dann weiterhin die
+# alte, unpatchte Version. apt-get upgrade zieht stattdessen bei jedem
+# Build die aktuell in Debians eigenen Repos verfügbaren Paketversionen.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     libcom-err2 \
     mc \
     ca-certificates \

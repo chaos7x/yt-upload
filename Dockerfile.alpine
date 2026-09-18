@@ -56,7 +56,11 @@ COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
 # von hier (siehe STUFE 1 / LAYER 4), sondern per pip aus dem Builder - das
 # apk-Paket py3-inotify packt ein anderes, unpassendes Projekt (s.o.). Bewusst
 # OHNE pip/setuptools - die werden nur im Builder (STUFE 1) gebraucht.
-RUN apk add --no-cache \
+# apk upgrade: die im alpine-Base-Image bereits vorinstallierten Pakete
+# (busybox, musl, apk-tools, ...) hinken Alpines eigenen Security-Patches
+# ggf. hinterher, bis das Base-Image neu gebaut wird - apk upgrade zieht
+# stattdessen bei jedem Build die aktuell verfügbaren Paketversionen.
+RUN apk upgrade --no-cache && apk add --no-cache \
     python3 \
     py3-requests \
     libcom_err \
