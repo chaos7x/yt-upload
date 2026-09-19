@@ -153,7 +153,14 @@ def main():
 
     logger.info(f"=== {__title__} v{__version__} gestartet ===")
 
-    if not acquire_instance_lock():
+    # Der Instanz-Lock schützt nur davor, dass sich Auto-Batch und Dämon (die
+    # sich IN_DIR/WORK_DIR teilen) gegenseitig Dateien wegschnappen - siehe
+    # acquire_instance_lock() in daemon.py. Der manuelle Datei-Modus rührt
+    # diese Verzeichnisse gar nicht mehr an (manage_files=False) und darf
+    # daher problemlos parallel zu einem laufenden Dämon einen Einzel-Upload
+    # fahren, ohne künstlich mit "Es läuft bereits eine andere Instanz"
+    # abgewiesen zu werden.
+    if (args.auto or args.daemon) and not acquire_instance_lock():
         sys.exit(1)
 
     # Modus 1: Manueller Upload einer oder mehrerer angegebener Dateien
