@@ -1,5 +1,5 @@
 #!/bin/sh
-# Wird von dpkg vor dem Entfernen des Pakets ausgefuehrt (fpm --before-remove).
+# Wird von dpkg vor dem Entfernen des yt-upload-daemon .deb ausgefuehrt (fpm --before-remove).
 # $1 = "remove" beim tatsaechlichen Entfernen, "upgrade" bei einem Update auf
 # eine neue Version - der Dienst soll bei einem Upgrade weiterlaufen.
 set -e

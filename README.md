@@ -159,14 +159,26 @@ Die Logdatei landet je nach Umgebung automatisch am sinnvollsten Ort (`/var/log/
 
 ### Alternative: Fertiges Debian-Paket (.deb)
 
-Jedes [GitHub Release](https://github.com/chaos7x/yt-upload/releases) enthält zusätzlich ein `yt-upload_<version>_all.deb` als Anhang - keine manuelle `pip`-Installation nötig, `apt`/`dpkg` löst die Abhängigkeiten (`python3-requests`, `ffmpeg`; `python3-inotify` als Empfehlung für den Dämon-Modus) automatisch mit auf:
+Jedes [GitHub Release](https://github.com/chaos7x/yt-upload/releases) enthält zwei `.deb`-Anhänge, aufgeteilt nach Nutzung - keine manuelle `pip`-Installation nötig:
+
+* **`yt-upload_<version>_all.deb`** - CLI, Python-Package und Config (`/etc/yt-upload/upload.conf`). Reicht für den rein manuellen Datei-Modus (`yt-upload video.mp4 ...`) und Auto-Batch (`-a`). `apt`/`dpkg` löst `python3-requests`/`ffmpeg` automatisch mit auf.
+* **`yt-upload-daemon_<version>_all.deb`** - nur für den Dämon-Modus (`-D`) nötig: systemd-Service, dedizierter Systemuser (`yt-upload`) und die `python3-inotify`-Abhängigkeit für die Echtzeit-Ordnerüberwachung. Hängt von `yt-upload` in exakt derselben Version ab, zieht es also automatisch mit.
+
+Nur die CLI ohne Dämon-Overhead (Systemuser, `python3-inotify`, nie aktivierter systemd-Service):
 
 ```bash
 wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload_<version>_all.deb
 apt install ./yt-upload_<version>_all.deb
 ```
 
-Das Paket legt einen dedizierten Systemuser (`yt-upload`) und einen systemd-Service für den Dämon-Modus an (`yt-upload -D`), startet ihn aber bewusst nicht automatisch. Da `IN_DIR`/`WORK_DIR`/etc. ohne ein `/videos`-Volume (wie im Docker-Setup) nicht automatisch erkannt werden, zuerst `[paths]` in `/etc/yt-upload/upload.conf` setzen, `get-token` einmalig manuell ausführen (kein Service, siehe oben), dann:
+Für den Dauerbetrieb zusätzlich das Daemon-Paket installieren (zieht `yt-upload` automatisch nach, falls noch nicht vorhanden):
+
+```bash
+wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload-daemon_<version>_all.deb
+apt install ./yt-upload-daemon_<version>_all.deb
+```
+
+Das Daemon-Paket legt den Systemuser und den systemd-Service an, startet ihn aber bewusst nicht automatisch. Da `IN_DIR`/`WORK_DIR`/etc. ohne ein `/videos`-Volume (wie im Docker-Setup) nicht automatisch erkannt werden, zuerst `[paths]` in `/etc/yt-upload/upload.conf` setzen, `get-token` einmalig manuell ausführen (kein Service, siehe oben), dann:
 
 ```bash
 systemctl enable --now yt-upload

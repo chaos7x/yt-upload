@@ -44,7 +44,7 @@ node_oauth_google["Google OAuth"]
 node_operator -->|"invokes"| node_main
 node_video_source -->|"provides files"| node_video_dirs
 node_main -->|"loads config"| node_config
-node_main -->|"ensures directories"| node_file_state
+node_main -->|"ensures directories (auto/daemon only)"| node_file_state
 node_main -->|"processes files"| node_pipeline
 node_main -->|"starts daemon"| node_daemon
 node_main -->|"runs check"| node_health
@@ -98,14 +98,14 @@ class node_get_token,node_credentials,node_operator,node_video_source,node_ffmpe
 
 ### Einstieg & Betrieb
 
-- **`main.py`** — argparse-CLI, drei sich gegenseitig ausschließende Modi: manuelle Datei(en) (`yt-upload video1.mp4 ...`), Auto-Batch (`-a`, verarbeitet `IN_DIR` einmalig), Dämon (`-D`, dauerhafter inotify-Watch). `_resolve_file_args()` erzeugt pro Datei eine eigene `argparse.Namespace`-Kopie, damit die `--title-template`-Nummerierung bei mehreren Dateien nicht das gemeinsame `args`-Objekt mutiert.
+- **`main.py`** — argparse-CLI, drei sich gegenseitig ausschließende Modi: manuelle Datei(en) (`yt-upload video1.mp4 ...`), Auto-Batch (`-a`, verarbeitet `IN_DIR` einmalig), Dämon (`-D`, dauerhafter inotify-Watch). `_resolve_file_args()` erzeugt pro Datei eine eigene `argparse.Namespace`-Kopie, damit die `--title-template`-Nummerierung bei mehreren Dateien nicht das gemeinsame `args`-Objekt mutiert. `ensure_directories()` läuft nur für `-a`/`-D`: der manuelle Datei-Modus verarbeitet die übergebene(n) Datei(en) an Ort und Stelle (siehe `pipeline.py` unten) und braucht `IN_DIR`/`WORK_DIR`/`DONE_DIR`/`CORRUPT_DIR`/`RETRY_DIR` daher gar nicht erst.
 - **`config.py`** — alle Laufzeit-Einstellungen liegen als Modul-globale Variablen, geladen von `load_configuration()` mit der Prioritätskette Hardcoded-Defaults → `/etc/yt-upload/upload.conf` → `conf.d/*.conf` → Umgebungsvariablen (höchste Priorität). Andere Module referenzieren Werte immer als `config.NAME` (nie `from yt_upload.config import NAME`), damit ein späteres Hot-Reload durch `load_configuration()` auch tatsächlich ankommt. Container- vs. Bare-Metal-Defaults werden über `os.path.exists("/app/oauth")` / `os.path.exists("/videos")` unterschieden.
 - **`daemon.py`** — inotify-basierter Watch (ausschließlich `IN_CLOSE_WRITE`/`IN_MOVED_TO`, um eine sich selbst befeuernde Event-Schleife durch die eigenen Verzeichnis-Scans zu vermeiden) mit Polling-Fallback, falls das `inotify`-Paket fehlt, plus ein `flock`-basierter Single-Instance-Lock (`acquire_instance_lock()`).
 - **`healthcheck.py`** — `write_heartbeat()` aktualisiert regelmäßig (auch innerhalb langer Einzeloperationen wie einem mehrstündigen Resumable-Upload) eine Heartbeat-Datei; `run_healthcheck()` prüft nur deren Existenz/Alter, lädt bewusst keine Config und ist damit für häufige externe Aufrufe (Docker `HEALTHCHECK`) geeignet.
 
 ### Medienverarbeitung
 
-- **`pipeline.py`** — `process_single_file()` ist die Zustandsmaschine pro Datei: validieren → nach `WORK_DIR` verschieben → Metadaten/Thumbnail extrahieren → bei >10h splitten → jedes Segment hochladen → nach `DONE_DIR`/`CORRUPT_DIR`/`RETRY_DIR` verschieben. Die Funktion wirft bei einem Upload-Fehler **nie** eine Exception — sie routet die Datei intern selbst und kehrt zurück —, weshalb sowohl Auto-Batch als auch der Multi-Datei-CLI-Modus ohne eigenes try/except über Dateien iterieren können.
+- **`pipeline.py`** — `process_single_file()` ist die Zustandsmaschine pro Datei, gesteuert über den Parameter `manage_files` (Standard `True`, von Auto-Batch/Dämon verwendet): validieren → nach `WORK_DIR` verschieben → Metadaten/Thumbnail extrahieren → bei >10h splitten → jedes Segment hochladen → nach `DONE_DIR`/`CORRUPT_DIR`/`RETRY_DIR` verschieben. Der manuelle CLI-Modus ruft mit `manage_files=False` auf: die Quelldatei bleibt exakt liegen (kein Move nach WORK/DONE/CORRUPT/RETRY), ein Splitting bei Überlänge schreibt seine Segmente stattdessen in ein per `tempfile.mkdtemp()` erzeugtes Temp-Verzeichnis. Die Funktion wirft bei einem Upload-Fehler **nie** eine Exception — sie routet/loggt das Ergebnis intern selbst und kehrt zurück —, weshalb sowohl Auto-Batch als auch der Multi-Datei-CLI-Modus ohne eigenes try/except über Dateien iterieren können.
 - **`media.py`** — sämtliche `ffprobe`/`ffmpeg`-Aufrufe: Metadaten-/Thumbnail-Extraktion, Bereitschaftsprüfung (Datei wird noch geschrieben?) und verlustfreies Splitting per Stream-Copy-Segmentierung oberhalb von `SEGMENT_TIME_SEC` (10h).
 - **`text_utils.py`** — Sanitizing für die API, Mapping YouTube-Kategoriename → ID, sowie der Beschreibungs-Blacklist-Zensor.
 

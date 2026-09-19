@@ -50,6 +50,38 @@ class UploaderRegressionTests(unittest.TestCase):
                 ["recording_part00.mkv", "recording_part01.mkv"],
             )
 
+    def test_split_writes_to_explicit_output_dir_not_workdir(self):
+        """
+        Der manuelle CLI-Modus (process_single_file(manage_files=False)) übergibt
+        ein eigenes Temp-Verzeichnis statt WORK_DIR zu benutzen - split_video_if_needed()
+        muss dieses dann tatsächlich verwenden, nicht config.WORK_DIR.
+        """
+        with tempfile.TemporaryDirectory() as source_dir, tempfile.TemporaryDirectory() as other_work_dir:
+            source = Path(source_dir) / "recording.mkv"
+            source.write_bytes(b"source")
+            output_dir = Path(source_dir) / "split_output"
+            output_dir.mkdir()
+
+            def fake_run(command, **kwargs):
+                if command[0] == "ffprobe":
+                    return subprocess.CompletedProcess(command, 0, stdout="72001\n", stderr="")
+                (output_dir / "recording_part00.mkv").write_bytes(b"part 0")
+                (output_dir / "recording_part01.mkv").write_bytes(b"part 1")
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            # WORK_DIR zeigt bewusst auf ein GANZ ANDERES Verzeichnis als
+            # output_dir, damit ein versehentlicher Rückfall auf config.WORK_DIR
+            # den Test zuverlässig scheitern lässt (leeres other_work_dir).
+            with patch.object(config, "WORK_DIR", other_work_dir):
+                with patch.object(media.subprocess, "run", side_effect=fake_run):
+                    segments = media.split_video_if_needed(str(source), output_dir=str(output_dir))
+
+            self.assertEqual(
+                [Path(segment).name for segment in segments],
+                ["recording_part00.mkv", "recording_part01.mkv"],
+            )
+            self.assertEqual(list(Path(other_work_dir).iterdir()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

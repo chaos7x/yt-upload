@@ -139,7 +139,15 @@ def main():
         return
 
     config.load_configuration(log_changes=False)
-    ensure_directories()
+
+    # Nur Auto-Batch (-a) und Dämon (-D) verwalten Dateien über die festen
+    # IN_DIR/WORK_DIR/DONE_DIR/CORRUPT_DIR/RETRY_DIR-Verzeichnisse. Der
+    # manuelle Datei-Modus verarbeitet die übergebene(n) Datei(en) an Ort und
+    # Stelle (process_single_file(..., manage_files=False)) und braucht diese
+    # Verzeichnisse daher nicht - wichtig für professionelle CLI-Nutzung, wo
+    # weder ein gemountetes /videos-Volume noch eine upload.conf existiert.
+    if args.auto or args.daemon:
+        ensure_directories()
 
     setup_logging()
 
@@ -160,7 +168,7 @@ def main():
 
         total = len(args.files)
         for index, file_path in enumerate(args.files):
-            process_single_file(file_path, _resolve_file_args(args, index, total))
+            process_single_file(file_path, _resolve_file_args(args, index, total), manage_files=False)
 
     # Modus 2: Auto-Batch – verarbeitet alle bereits vorhandenen Dateien nacheinander
     elif args.auto:
