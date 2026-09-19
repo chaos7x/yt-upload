@@ -21,7 +21,7 @@ flowchart TB
         PIPE["Upload-Pipeline<br/>[pipeline.py]"]
         MEDIA["FFmpeg-Medienlogik<br/>[media.py]"]
         TEXT["Textaufbereitung<br/>[text_utils.py]"]
-        PIPE -->|prüft/extrahiert, splittet >10h| MEDIA
+        PIPE -->|prüft/extrahiert, splittet ab 10h| MEDIA
         PIPE -->|sanitized Titel/Beschreibung| TEXT
     end
 
@@ -39,10 +39,10 @@ flowchart TB
 
     EXT(("Externe<br/>Video-Zulieferung")) -->|legt Datei ab| VIDEODIRS
     DAEMON -->|überwacht Eingang IN_CLOSE_WRITE/IN_MOVED_TO| VIDEODIRS
-    MAIN -->|verarbeitet Datei(en) manuell/-a| PIPE
+    MAIN -->|verarbeitet Dateien manuell/-a| PIPE
     DAEMON -->|startet Verarbeitung| PIPE
 
-    PIPE -->|verschiebt IN→WORK→DONE/CORRUPT/RETRY| VIDEODIRS
+    PIPE -->|verschiebt IN zu WORK zu DONE/CORRUPT/RETRY| VIDEODIRS
     PIPE -->|persistiert Segment-Fortschritt| PROGRESS
     PIPE -->|lädt Segmente hoch| API
 
