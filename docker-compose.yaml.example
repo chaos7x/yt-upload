@@ -14,17 +14,6 @@ services:
       - TZ=Europe/Berlin
       - ENABLE_DYNAMIC_PLAYLISTS=true
       - HOME=/tmp  # Hält Schreibzugriffe für Caches/Config aus dem :ro gemounteten /app fern
-      # Alle fünf biegen bewusst auf Unterordner des einen yt-upload-data-
-      # Mounts unten um, statt jeweils ein eigenes Volume zu bekommen - der
-      # Code-Default liegt sonst einheitlich unter /srv/media-pipeline/*
-      # (siehe config.py), was hier aber einen zusätzlichen Bind-Mount pro
-      # Verzeichnis bedeuten würde. IN_DIR ist der einzige davon, in den auch
-      # fetchbridge hineinschreibt (siehe dessen docker-compose.yaml.example).
-      - IN_DIR=/srv/yt-upload/in
-      - WORK_DIR=/srv/yt-upload/work
-      - DONE_DIR=/srv/yt-upload/done
-      - CORRUPT_DIR=/srv/yt-upload/corrupt
-      - RETRY_DIR=/srv/yt-upload/retry
     env_file:
       - .env
     volumes:
@@ -36,10 +25,13 @@ services:
       # sucht das Tool die Client-Secrets nun unter /app/oauth
       - oauth:/app/oauth
 
-      # 3. Kompletter Datenzustand (in/work/done/corrupt/retry) in einem
-      # einzigen Bind-Mount - die ENV-Variablen oben biegen die einzelnen
-      # Verzeichnisse auf die passenden Unterordner um.
-      - yt-upload-data:/srv/yt-upload
+      # 3. Kompletter Datenzustand (incoming/work/done/corrupt/retry) in
+      # einem einzigen Bind-Mount direkt auf /srv/media-pipeline - trifft
+      # damit exakt den Code-Default (siehe config.py), keine ENV-Umbiegung
+      # nötig. "incoming" ist der einzige Unterordner davon, in den auch
+      # fetchbridge hineinschreibt (siehe dessen docker-compose.yaml.example);
+      # die Unterordner selbst legt yt-upload beim ersten Start automatisch an.
+      - yt-upload-data:/srv/media-pipeline
 
       # 4. Log Verzeichnis
       - log:/log
