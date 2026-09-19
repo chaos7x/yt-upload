@@ -57,13 +57,15 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 # ------------------------------------------
 # Gehärtetes Image: laeuft standardmaessig nicht als root, auch wenn beim
 # Deploy kein `user:`/`-u` gesetzt wird. UID/GID bewusst NICHT fest kodiert -
-# adduser --system waehlt automatisch eine freie System-UID <1000, genau wie
-# beim .deb-Postinst. Wer die UID an sein eigenes Setup anpassen will (z.B.
+# useradd/groupadd (statt adduser, das im -slim-Base-Image fehlt und den
+# Build mit "exit code: 127" scheitern liess) waehlen automatisch eine freie
+# System-UID <1000. Wer die UID an sein eigenes Setup anpassen will (z.B.
 # fuer Bind-Mount-Rechte), ueberschreibt sie ganz normal per `docker run -u`/
 # Compose `user:` - die 1777-Verzeichnisse unten bleiben davon unabhaengig
 # fuer jede UID beschreibbar.
-RUN adduser --system --group --no-create-home --home /nonexistent \
-    --shell /usr/sbin/nologin yt-upload
+RUN groupadd --system yt-upload \
+    && useradd --system --no-create-home --home /nonexistent \
+        --shell /usr/sbin/nologin --gid yt-upload yt-upload
 
 # Arbeitsverzeichnis & Home-Variable setzen
 WORKDIR /app
