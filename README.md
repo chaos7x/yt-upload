@@ -77,13 +77,8 @@ docker run -d \
   -e TZ=Europe/Berlin \
   -e ENABLE_DYNAMIC_PLAYLISTS=true \
   -e HOME=/tmp \
-  -e IN_DIR=/srv/yt-upload/in \
-  -e WORK_DIR=/srv/yt-upload/work \
-  -e DONE_DIR=/srv/yt-upload/done \
-  -e CORRUPT_DIR=/srv/yt-upload/corrupt \
-  -e RETRY_DIR=/srv/yt-upload/retry \
   -v $(pwd)/oauth:/app/oauth:rw \
-  -v $(pwd)/yt-upload-data:/srv/yt-upload:rw \
+  -v $(pwd)/yt-upload-data:/srv/media-pipeline:rw \
   -v $(pwd)/log:/log:rw \
   ghcr.io/chaos7x/yt-upload:latest
 ```
@@ -107,19 +102,15 @@ services:
       - HOME=/tmp
       - ENABLE_DESCRIPTION_CENSOR=true
       - DESCRIPTION_BLACKLIST=onlyfans.com,fansly.com,loyalfans.com,manyvids.com,pornhub.com,chaturbate.com,stake.com,csgoroll.com,hellcase.com,1xbet.com,adf.ly,shorte.st
-      # Alle fünf biegen bewusst auf Unterordner des einen yt-upload-data-
-      # Mounts unten um, statt jeweils ein eigenes Volume zu bekommen (der
-      # Code-Default liegt sonst einheitlich unter /srv/media-pipeline/*)
-      - IN_DIR=/srv/yt-upload/in
-      - WORK_DIR=/srv/yt-upload/work
-      - DONE_DIR=/srv/yt-upload/done
-      - CORRUPT_DIR=/srv/yt-upload/corrupt
-      - RETRY_DIR=/srv/yt-upload/retry
     env_file:
       - .env
     volumes:
       - oauth:/app/oauth
-      - yt-upload-data:/srv/yt-upload
+      # Kompletter Datenzustand (incoming/work/done/corrupt/retry) in einem
+      # einzigen Bind-Mount direkt auf /srv/media-pipeline - trifft damit
+      # exakt den Code-Default, keine ENV-Umbiegung nötig. "incoming" ist
+      # der einzige Unterordner davon, in den auch fetchbridge hineinschreibt.
+      - yt-upload-data:/srv/media-pipeline
       - log:/log
       # Optional: eigene upload.conf statt der im Image mitgelieferten
       # Beispielkonfiguration nutzen (einzelne Datei, kein ganzes Verzeichnis):
