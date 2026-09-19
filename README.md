@@ -77,8 +77,8 @@ docker run -d \
   -e TZ=Europe/Berlin \
   -e ENABLE_DYNAMIC_PLAYLISTS=true \
   -e HOME=/tmp \
+  -e IN_DIR=/srv/yt-upload/in \
   -v $(pwd)/oauth:/app/oauth:rw \
-  -v $(pwd)/incoming:/srv/media-pipeline/incoming:rw \
   -v $(pwd)/yt-upload-data:/srv/yt-upload:rw \
   -v $(pwd)/log:/log:rw \
   ghcr.io/chaos7x/yt-upload:latest
@@ -103,11 +103,13 @@ services:
       - HOME=/tmp
       - ENABLE_DESCRIPTION_CENSOR=true
       - DESCRIPTION_BLACKLIST=onlyfans.com,fansly.com,loyalfans.com,manyvids.com,pornhub.com,chaturbate.com,stake.com,csgoroll.com,hellcase.com,1xbet.com,adf.ly,shorte.st
+      # IN_DIR liegt bewusst innerhalb des einen yt-upload-data-Mounts unten
+      # statt in einem eigenen Volume - spart einen zweiten Bind-Mount
+      - IN_DIR=/srv/yt-upload/in
     env_file:
       - .env
     volumes:
       - oauth:/app/oauth
-      - incoming:/srv/media-pipeline/incoming
       - yt-upload-data:/srv/yt-upload
       - log:/log
       # Optional: eigene upload.conf statt der im Image mitgelieferten
@@ -124,13 +126,6 @@ volumes:
       type: none
       o: bind
       device: "./oauth"
-
-  incoming:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: "./incoming"
 
   yt-upload-data:
     driver: local
