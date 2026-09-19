@@ -53,31 +53,23 @@ def _is_dedicated_mount(path):
         return False
 
 
-# Dynamic Path Detection: Docker Container Mounts (/videos) vs. Bare-Metal Host.
-# _is_dedicated_mount() statt blosser Existenzpruefung, da das Dockerfile
-# /videos unconditional per `mkdir -p` anlegt - ohne echtes Volume wuerde die
-# App sonst faelschlich "Container-Modus" annehmen und in den fluechtigen
-# Container-Layer statt auf einen Bare-Metal-Pfad schreiben (derselbe Bug wie
-# bei /log, siehe _default_log_file()).
-#
-# Auf Bare-Metal zeigen alle fuenf Verzeichnisse bewusst einheitlich in
-# denselben /srv/media-pipeline-Namespace statt IN_DIR (geteilt mit
-# fetchbridge) von WORK_DIR/DONE_DIR/CORRUPT_DIR/RETRY_DIR (nur intern
-# von yt-upload genutzt) getrennt zu halten - ein gemeinsamer Ort fuer
-# saemtliche Pipeline-Daten ist einfacher zu ueberblicken als zwei
-# verschiedene Namespaces mit unterschiedlicher Herkunft. Das .deb-Postinst
-# legt alle fuenf mit derselben gemeinsamen Gruppe an; dass WORK_DIR & Co.
-# damit auch fuer tw-recorder/fetchbridge technisch zugreifbar waeren, ist
-# hier bewusst in Kauf genommen (keiner der beiden liest/schreibt dort
-# tatsaechlich).
-_videos_mounted = _is_dedicated_mount("/videos")
-IN_DIR = os.environ.get('IN_DIR', "/videos/in" if _videos_mounted else "/srv/media-pipeline/incoming")
-WORK_DIR = os.environ.get('WORK_DIR', "/videos/work" if _videos_mounted else "/srv/media-pipeline/work")
-DONE_DIR = os.environ.get('DONE_DIR', "/videos/done" if _videos_mounted else "/srv/media-pipeline/done")
-CORRUPT_DIR = os.environ.get('CORRUPT_DIR', "/videos/corrupt" if _videos_mounted else "/srv/media-pipeline/corrupt")
+# Alle fuenf Verzeichnisse zeigen einheitlich (Docker wie Bare-Metal) in
+# denselben /srv/media-pipeline-Namespace statt der inzwischen abgeloesten
+# /videos/*-Mountpunkte - IN_DIR (geteilt mit fetchbridge) bleibt dabei bewusst
+# im selben Namespace wie WORK_DIR/DONE_DIR/CORRUPT_DIR/RETRY_DIR (nur intern
+# von yt-upload genutzt), da ein gemeinsamer Ort fuer saemtliche Pipeline-Daten
+# einfacher zu ueberblicken ist als zwei verschiedene Namespaces mit
+# unterschiedlicher Herkunft. Das .deb-Postinst legt alle fuenf mit derselben
+# gemeinsamen Gruppe an; dass WORK_DIR & Co. damit auch fuer tw-recorder/
+# fetchbridge technisch zugreifbar waeren, ist hier bewusst in Kauf genommen
+# (keiner der beiden liest/schreibt dort tatsaechlich).
+IN_DIR = os.environ.get('IN_DIR', "/srv/media-pipeline/incoming")
+WORK_DIR = os.environ.get('WORK_DIR', "/srv/media-pipeline/work")
+DONE_DIR = os.environ.get('DONE_DIR', "/srv/media-pipeline/done")
+CORRUPT_DIR = os.environ.get('CORRUPT_DIR', "/srv/media-pipeline/corrupt")
 # Für Dateien, bei denen bereits mind. ein Segment erfolgreich hochgeladen wurde, bevor ein Fehler auftrat.
 # Getrennt von CORRUPT_DIR, damit kein versehentlicher Doppel-Upload bereits hochgeladener Segmente droht.
-RETRY_DIR = os.environ.get('RETRY_DIR', "/videos/retry" if _videos_mounted else "/srv/media-pipeline/retry")
+RETRY_DIR = os.environ.get('RETRY_DIR', "/srv/media-pipeline/retry")
 
 DEBUG_MODE = os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1')
 os.environ['DEBUG'] = '1' if DEBUG_MODE else '0'

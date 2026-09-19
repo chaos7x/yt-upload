@@ -182,7 +182,7 @@ wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload-dae
 apt install ./yt-upload-daemon_<version>_all.deb
 ```
 
-Das Daemon-Paket legt den Systemuser und den systemd-Service an, startet ihn aber bewusst nicht automatisch. `IN_DIR`/`WORK_DIR`/`DONE_DIR`/`CORRUPT_DIR`/`RETRY_DIR` zeigen ohne ein `/videos`-Volume (wie im Docker-Setup) automatisch einheitlich auf `/srv/media-pipeline/{incoming,work,done,corrupt,retry}` - `IN_DIR` ist davon dasselbe Verzeichnis, in das `fetchbridge`s `TARGET_DIR` schreibt, die anderen vier sind rein interner Zustand. Das `.deb`-Postinst legt alle fünf mit der gemeinsamen Gruppe (`media-pipeline`) an. Wer davon abweichende Pfade will, kann sie wie gehabt über `[paths]` in `/etc/yt-upload/upload.conf` überschreiben. Vor dem ersten Start noch `get-token` einmalig manuell ausführen (kein Service, siehe oben), dann:
+Das Daemon-Paket legt den Systemuser und den systemd-Service an, startet ihn aber bewusst nicht automatisch. `IN_DIR`/`WORK_DIR`/`DONE_DIR`/`CORRUPT_DIR`/`RETRY_DIR` zeigen automatisch einheitlich (Docker wie Bare-Metal) auf `/srv/media-pipeline/{incoming,work,done,corrupt,retry}` - `IN_DIR` ist davon dasselbe Verzeichnis, in das `fetchbridge`s `TARGET_DIR` schreibt, die anderen vier sind rein interner Zustand. Das `.deb`-Postinst legt alle fünf mit der gemeinsamen Gruppe (`media-pipeline`) an. Wer davon abweichende Pfade will, kann sie wie gehabt über `[paths]` in `/etc/yt-upload/upload.conf` überschreiben. Vor dem ersten Start noch `get-token` einmalig manuell ausführen (kein Service, siehe oben), dann:
 
 ```bash
 systemctl enable --now yt-upload
@@ -325,7 +325,7 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
   Startet den Dauerüberwachungs-Dämon via `inotify` (ohne Argumente).
 
 * `-a`, `--auto`
-  Verarbeitet alle Videos in `IN_DIR` (Standard: `/videos/in` im Container, falls dort ein Volume gemountet ist, sonst `/srv/media-pipeline/incoming`) im Batch-Modus und beendet sich danach.
+  Verarbeitet alle Videos in `IN_DIR` (Standard: `/srv/media-pipeline/incoming`) im Batch-Modus und beendet sich danach.
 
 * `--healthcheck`
   Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort - für Docker `HEALTHCHECK` gedacht, nicht für den interaktiven Gebrauch.
@@ -395,7 +395,7 @@ Sämtliche Pfade aus dem `[paths]`-Abschnitt der `upload.conf` (siehe oben) lass
 * `/srv/media-pipeline/corrupt`: Zielverzeichnis für beschädigte, nicht lesbare oder komplett fehlgeschlagene Videodateien.
 * `/srv/media-pipeline/retry`: Zielverzeichnis für Dateien mit Teilfortschritt (mind. ein Segment bereits hochgeladen, dann ein Fehler) - manuell zurück nach `/srv/media-pipeline/incoming` verschieben, um den Rest nachzuholen.
 
-`work`/`done`/`corrupt`/`retry` sind rein interner Zustand von yt-upload - kein anderer Dienst liest oder schreibt dort, sie liegen nur der Einfachheit halber im selben `/srv/media-pipeline`-Namespace wie `incoming`. Für bestehende Setups mit einem einzelnen `/videos`-Volume (mit `in`/`work`/`done`/`corrupt`/`retry`-Unterordnern) funktioniert das weiterhin unverändert - neue Deployments sollten aber die Pfade oben verwenden.
+`work`/`done`/`corrupt`/`retry` sind rein interner Zustand von yt-upload - kein anderer Dienst liest oder schreibt dort, sie liegen nur der Einfachheit halber im selben `/srv/media-pipeline`-Namespace wie `incoming`.
 
 ---
 
