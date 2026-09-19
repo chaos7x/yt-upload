@@ -2,11 +2,33 @@
 name = "yt-upload"
 version = "1.9.2"
 description = "Automatisierter YouTube Upload Workflow"
-readme = "README.md"
+readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.11"
+license = {text = "GPL-3.0-or-later"}
+authors = [
+    {name = "chaos7x"},
+]
+keywords = ["youtube", "upload", "video", "resumable-upload", "ffmpeg", "automation", "daemon", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+]
 dependencies = [
     "requests",
 ]
+
+[project.urls]
+Homepage = "https://github.com/chaos7x/yt-upload"
+Repository = "https://github.com/chaos7x/yt-upload"
+Issues = "https://github.com/chaos7x/yt-upload/issues"
 
 [project.optional-dependencies]
 # inotify ist bewusst optional: der Dämon-Modus hat einen try/except-Fallback
