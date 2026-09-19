@@ -121,6 +121,23 @@ def main():
     if args.healthcheck:
         sys.exit(run_healthcheck())
 
+    # Kein Betriebsmodus gewählt (bloßer Aufruf ohne Argumente) - nur die
+    # Kurzhilfe ausgeben und beenden, BEVOR Config/Verzeichnisse/Logging
+    # initialisiert werden. Ohne diese Prüfung würde ein reiner
+    # Hilfe-Aufruf auf Systemen, auf denen IN_DIR/WORK_DIR/etc. (oder die
+    # Logdatei) nicht anlegbar sind (z.B. Bare-Metal-Installation ohne
+    # gesetztes upload.conf, Aufruf aus einem schreibgeschützten
+    # Verzeichnis), unnötige Permission-Warnungen erzeugen.
+    if not (args.files or args.auto or args.daemon):
+        print(f"{__title__} v{__version__}\n")
+        print("Bitte einen Betriebsmodus wählen:")
+        print("  - Einzelne Datei:  yt-upload /pfad/zum/video.mp4")
+        print("  - Mehrere Dateien: yt-upload video1.mp4 video2.mp4 ...")
+        print("  - Auto-Pipeline:   yt-upload -a")
+        print("  - Dämon-Modus:     yt-upload -D")
+        print("\nNutze -h oder --help für alle Optionen.")
+        return
+
     config.load_configuration(log_changes=False)
     ensure_directories()
 
@@ -158,15 +175,6 @@ def main():
     # Modus 3: Dämonen-Modus – Dauerhafte Überwachung mittels Inotify
     elif args.daemon:
         run_daemon()
-
-    else:
-        print(f"{__title__} v{__version__}\n")
-        print("Bitte einen Betriebsmodus wählen:")
-        print("  - Einzelne Datei:  yt-upload /pfad/zum/video.mp4")
-        print("  - Mehrere Dateien: yt-upload video1.mp4 video2.mp4 ...")
-        print("  - Auto-Pipeline:   yt-upload -a")
-        print("  - Dämon-Modus:     yt-upload -D")
-        print("\nNutze -h oder --help für alle Optionen.")
 
 
 if __name__ == "__main__":
