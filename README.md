@@ -178,7 +178,7 @@ wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload-dae
 apt install ./yt-upload-daemon_<version>_all.deb
 ```
 
-Das Daemon-Paket legt den Systemuser und den systemd-Service an, startet ihn aber bewusst nicht automatisch. Da `IN_DIR`/`WORK_DIR`/etc. ohne ein `/videos`-Volume (wie im Docker-Setup) nicht automatisch erkannt werden, zuerst `[paths]` in `/etc/yt-upload/upload.conf` setzen, `get-token` einmalig manuell ausführen (kein Service, siehe oben), dann:
+Das Daemon-Paket legt den Systemuser und den systemd-Service an, startet ihn aber bewusst nicht automatisch. `IN_DIR` zeigt ohne ein `/videos`-Volume (wie im Docker-Setup) automatisch auf `/srv/media-pipeline/incoming` - dasselbe Verzeichnis, in das `fetchbridge`s `TARGET_DIR` schreibt, das `.deb`-Postinst legt es mit der gemeinsamen Gruppe (`media-pipeline`) an. `WORK_DIR`/`DONE_DIR`/`CORRUPT_DIR`/`RETRY_DIR` liegen entsprechend unter dem privaten `/srv/yt-upload/`. Wer davon abweichende Pfade will, kann sie wie gehabt über `[paths]` in `/etc/yt-upload/upload.conf` überschreiben. Vor dem ersten Start noch `get-token` einmalig manuell ausführen (kein Service, siehe oben), dann:
 
 ```bash
 systemctl enable --now yt-upload

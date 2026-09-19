@@ -8,6 +8,7 @@ Wants=network-online.target
 Type=simple
 User=yt-upload
 Group=yt-upload
+SupplementaryGroups=media-pipeline
 ExecStart=/usr/bin/yt-upload -D
 Restart=on-failure
 RestartSec=5
