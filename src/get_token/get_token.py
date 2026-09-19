@@ -49,7 +49,7 @@ SCOPES = [
 
 
 def load_client_secrets():
-    with open(CLIENT_SECRETS_FILE, "r", encoding="utf-8") as secrets_file:
+    with open(CLIENT_SECRETS_FILE, encoding="utf-8") as secrets_file:
         data = json.load(secrets_file)
 
     # Gleiche Präzedenz wie yt_upload.youtube_api.get_access_token() beim Lesen

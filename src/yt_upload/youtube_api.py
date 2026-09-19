@@ -48,12 +48,12 @@ def get_access_token(cred_file=None, client_secrets_file=None):
     except OSError:
         pass
 
-    with open(target_cred, "r", encoding="utf-8") as f:
+    with open(target_cred, encoding="utf-8") as f:
         data = json.load(f)
 
     client_data = data
     if client_secrets_file:
-        with open(client_secrets_file, "r", encoding="utf-8") as f:
+        with open(client_secrets_file, encoding="utf-8") as f:
             client_data = json.load(f)
 
     # Extrahiere IDs aus verschiedenen möglichen JSON-Strukturen (installed/web/flat)
