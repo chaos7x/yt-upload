@@ -243,3 +243,66 @@ class TestChunkUploadErrorHandling:
             )
 
         assert fake_session.put_calls == 5
+
+
+class TestChunkUploadContentRangeProbe:
+    """
+    "Failed to parse Content-Range header" ist ein bekannter, gelegentlich
+    transienter Ausrutscher der YouTube-API (v.a. beim letzten Chunk sehr
+    grosser Uploads) - statt das wie einen dauerhaften Fehler zu behandeln
+    und die ganze Datei zu verwerfen, fragt der Code per Status-Check
+    (leerer PUT mit `Content-Range: bytes */{file_size}`) den tatsaechlichen
+    Serverstand ab und macht von dort weiter.
+    """
+
+    def test_probe_reveals_chunk_was_received_and_upload_resumes(self, youtube_api, monkeypatch, large_video_file):
+        init_response = FakeResponse(200, headers={"Location": "https://fake/session-probe"})
+        put_400 = FakeResponse(400, text="Failed to parse Content-Range header")
+        probe_308 = FakeResponse(308, headers={"Range": "bytes=0-262143"})
+        put_ok = FakeResponse(200, json_data={"id": "vid_resumed"})
+        fake_session = FakeSession(init_response, [put_400, probe_308, put_ok])
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        result = youtube_api.upload_single_video(
+            file_path=large_video_file, title="Test", desc="", category=None, tags=None,
+            rec_date=None, thumb_path=None, playlist_name=None,
+            chunksize=262144
+        )
+
+        assert result == "vid_resumed"
+        assert fake_session.put_calls == 3
+        assert fake_session.put_headers_seen[1]["Content-Range"] == "bytes */300000"
+        # Nach dem Status-Check muss der naechste Chunk ab dem PROBIERTEN Offset
+        # weitergehen (262144), nicht erneut bei 0 anfangen.
+        assert fake_session.put_headers_seen[2]["Content-Range"] == "bytes 262144-299999/300000"
+
+    def test_probe_reveals_upload_was_already_complete(self, youtube_api, monkeypatch, video_file):
+        init_response = FakeResponse(200, headers={"Location": "https://fake/session-probe-done"})
+        put_400 = FakeResponse(400, text="Failed to parse Content-Range header")
+        probe_done = FakeResponse(200, json_data={"id": "vid_already_done"})
+        fake_session = FakeSession(init_response, [put_400, probe_done])
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        result = youtube_api.upload_single_video(
+            file_path=video_file, title="Test", desc="", category=None, tags=None,
+            rec_date=None, thumb_path=None, playlist_name=None
+        )
+
+        assert result == "vid_already_done"
+        assert fake_session.put_calls == 2
+
+    def test_probe_failure_falls_back_to_permanent_error(self, youtube_api, monkeypatch, video_file):
+        init_response = FakeResponse(200, headers={"Location": "https://fake/session-probe-fail"})
+        put_400 = FakeResponse(400, text="Failed to parse Content-Range header")
+        probe_404 = FakeResponse(404, text="session gone")
+        fake_session = FakeSession(init_response, [put_400, probe_404])
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        with pytest.raises(youtube_api.PermanentUploadError):
+            youtube_api.upload_single_video(
+                file_path=video_file, title="Test", desc="", category=None, tags=None,
+                rec_date=None, thumb_path=None, playlist_name=None
+            )
+
+        # Kein weiterer Retry-Versuch des eigentlichen Chunks nach dem gescheiterten Status-Check
+        assert fake_session.put_calls == 2
