@@ -9,7 +9,7 @@ Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten 
 ## ✨ Features
 
 * **Direkte HTTP REST API v3:** Native Implementierung für Resumable Chunk-Uploads ohne schwerfällige externe API-Wrapper.
-* **Inotify-Ordnerüberwachung:** Überwacht `/videos/in` im Dämon-Modus (`-D`) in Echtzeit auf Dateiveränderungen (`.mp4`, `.mkv`, `.mov`, `.m4v`) inklusive Polling-Fallback, falls `inotify` nicht verfügbar ist.
+* **Inotify-Ordnerüberwachung:** Überwacht `IN_DIR` im Dämon-Modus (`-D`) in Echtzeit auf Dateiveränderungen (`.mp4`, `.mkv`, `.mov`, `.m4v`) inklusive Polling-Fallback, falls `inotify` nicht verfügbar ist.
 * **Drei flexible Betriebsmodi:**
   1. **Dämon-Modus (`-D` / `--daemon`):** Dauerhafter Hintergrunddienst zur automatischen Überwachung.
   2. **Auto-Batch (`-a` / `--auto`):** Einmaliges Abarbeiten eines Verzeichnisses mit anschließendem Beenden.
@@ -78,7 +78,8 @@ docker run -d \
   -e ENABLE_DYNAMIC_PLAYLISTS=true \
   -e HOME=/tmp \
   -v $(pwd)/oauth:/app/oauth:rw \
-  -v $(pwd)/videos:/videos:rw \
+  -v $(pwd)/incoming:/srv/media-pipeline/incoming:rw \
+  -v $(pwd)/yt-upload-data:/srv/yt-upload:rw \
   -v $(pwd)/log:/log:rw \
   ghcr.io/chaos7x/yt-upload:latest
 ```
@@ -106,7 +107,8 @@ services:
       - .env
     volumes:
       - oauth:/app/oauth
-      - videos:/videos
+      - incoming:/srv/media-pipeline/incoming
+      - yt-upload-data:/srv/yt-upload
       - log:/log
       # Optional: eigene upload.conf statt der im Image mitgelieferten
       # Beispielkonfiguration nutzen (einzelne Datei, kein ganzes Verzeichnis):
@@ -123,12 +125,19 @@ volumes:
       o: bind
       device: "./oauth"
 
-  videos:
+  incoming:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: "./videos"
+      device: "./incoming"
+
+  yt-upload-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "./yt-upload-data"
 
   log:
     driver: local
@@ -236,21 +245,21 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
 
 [paths]
 # Verzeichnis für neu eingehende Videodateien
-#in_dir = /videos/in
+#in_dir = /srv/media-pipeline/incoming
 
 # Temporäres Arbeitsverzeichnis während der Verarbeitung/Splittings
-#work_dir = /videos/work
+#work_dir = /srv/yt-upload/work
 
 # Zielverzeichnis für erfolgreich hochgeladene und archivierte Dateien
-#done_dir = /videos/done
+#done_dir = /srv/yt-upload/done
 
 # Zielverzeichnis für fehlerhafte oder unvollständige Dateien
-#corrupt_dir = /videos/corrupt
+#corrupt_dir = /srv/yt-upload/corrupt
 
 # Zielverzeichnis für Dateien, bei denen bereits mind. ein Segment erfolgreich
 # hochgeladen wurde, bevor ein Fehler auftrat (getrennt von corrupt_dir, um
 # Doppel-Uploads bereits hochgeladener Segmente bei einem erneuten Lauf zu vermeiden)
-#retry_dir = /videos/retry
+#retry_dir = /srv/yt-upload/retry
 
 # Pfad zur zentralen Logdatei
 #log_file = /log/upload.log
@@ -321,7 +330,7 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
   Startet den Dauerüberwachungs-Dämon via `inotify` (ohne Argumente).
 
 * `-a`, `--auto`
-  Verarbeitet alle Videos in `IN_DIR` (Standard: `/videos/in`) im Batch-Modus und beendet sich danach.
+  Verarbeitet alle Videos in `IN_DIR` (Standard: `/videos/in` im Container, falls dort ein Volume gemountet ist, sonst `/srv/media-pipeline/incoming`) im Batch-Modus und beendet sich danach.
 
 * `--healthcheck`
   Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort - für Docker `HEALTHCHECK` gedacht, nicht für den interaktiven Gebrauch.
@@ -385,11 +394,13 @@ Sämtliche Pfade aus dem `[paths]`-Abschnitt der `upload.conf` (siehe oben) lass
 
 ## 📂 Verzeichnisstruktur im Container
 
-* `/videos/in`: Eingangsverzeichnis für neue Videodateien.
-* `/videos/work`: Temporäres Arbeitsverzeichnis während Analyse, Splitting und Upload.
-* `/videos/done`: Archivverzeichnis für erfolgreich verarbeitete Originaldateien.
-* `/videos/corrupt`: Zielverzeichnis für beschädigte, nicht lesbare oder komplett fehlgeschlagene Videodateien.
-* `/videos/retry`: Zielverzeichnis für Dateien mit Teilfortschritt (mind. ein Segment bereits hochgeladen, dann ein Fehler) - manuell zurück nach `/videos/in` verschieben, um den Rest nachzuholen.
+* `/srv/media-pipeline/incoming`: Eingangsverzeichnis für neue Videodateien - dasselbe Verzeichnis, in das `fetchbridge`s `TARGET_DIR` schreibt.
+* `/srv/yt-upload/work`: Temporäres Arbeitsverzeichnis während Analyse, Splitting und Upload.
+* `/srv/yt-upload/done`: Archivverzeichnis für erfolgreich verarbeitete Originaldateien.
+* `/srv/yt-upload/corrupt`: Zielverzeichnis für beschädigte, nicht lesbare oder komplett fehlgeschlagene Videodateien.
+* `/srv/yt-upload/retry`: Zielverzeichnis für Dateien mit Teilfortschritt (mind. ein Segment bereits hochgeladen, dann ein Fehler) - manuell zurück nach `/srv/media-pipeline/incoming` verschieben, um den Rest nachzuholen.
+
+Für bestehende Setups mit einem einzelnen `/videos`-Volume (mit `in`/`work`/`done`/`corrupt`/`retry`-Unterordnern) funktioniert das weiterhin unverändert - neue Deployments sollten aber die Pfade oben verwenden.
 
 ---
 

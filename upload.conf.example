@@ -5,19 +5,19 @@
 
 [paths]
 # Verzeichnis für neu eingehende Videodateien
-#in_dir = /videos/in
+#in_dir = /srv/media-pipeline/incoming
 
 # Temporäres Arbeitsverzeichnis während der Verarbeitung/Splittings
-#work_dir = /videos/work
+#work_dir = /srv/yt-upload/work
 
 # Zielverzeichnis für erfolgreich hochgeladene und archivierte Dateien
-#done_dir = /videos/done
+#done_dir = /srv/yt-upload/done
 
 # Zielverzeichnis für fehlerhafte oder unvollständige Dateien
-#corrupt_dir = /videos/corrupt
+#corrupt_dir = /srv/yt-upload/corrupt
 
 # Zielverzeichnis für Dateien aus diversen gründen noch mal hochgeladen weden müssen
-#retry_dir = /videos/retry
+#retry_dir = /srv/yt-upload/retry
 
 # Pfad zur zentralen Logdatei
 #log_file = /log/upload.log
