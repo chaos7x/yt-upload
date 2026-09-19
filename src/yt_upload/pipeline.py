@@ -1,9 +1,11 @@
 """Orchestrierung: process_single_file() steuert eine einzelne Datei durch
 Validierung, Metadaten-Extraktion, Splitting, Upload und Aufräumen."""
 
+import contextlib
 import logging
 import os
 import shutil
+import tempfile
 
 from yt_upload import config
 from yt_upload.fileutils import (
@@ -44,15 +46,26 @@ def _quarantine_symlink(file_path, filename):
     return target_corrupt
 
 
-def process_single_file(file_path, args=None):
+def process_single_file(file_path, args=None, manage_files=True):
     """
     Steuert die vollständige Verarbeitung einer Datei:
     1. Validierung
-    2. Verschieben nach WORK
+    2. Verschieben nach WORK (nur wenn manage_files=True)
     3. Metadaten-Extraktion & Zensierung
     4. Ggf. Splitting bei Überlänge
     5. Upload aller Teile
-    6. Verschieben nach DONE (oder CORRUPT bei Fehler)
+    6. Verschieben nach DONE (oder CORRUPT/RETRY bei Fehler; nur wenn manage_files=True)
+
+    manage_files=True (Standard, von Auto-Batch und Dämon verwendet) verwaltet
+    die Datei komplett über die festen WORK_DIR/DONE_DIR/CORRUPT_DIR/RETRY_DIR-
+    Verzeichnisse, wie es für einen unbeaufsichtigten Lauf nötig ist. Der
+    manuelle CLI-Modus (main.py, explizite Datei-Argumente) übergibt
+    manage_files=False: die Quelldatei bleibt exakt dort liegen, wo der
+    Nutzer sie angegeben hat - ein anwesender Mensch sieht den Erfolg/Fehler
+    ohnehin direkt an Exit-Code/Log, ein automatisches Verschieben in eines
+    dieser Verzeichnisse wäre nur überraschendes Verhalten. Ein eventuelles
+    Splitting bei Überlänge (>10h) schreibt seine Segmente in diesem Fall in
+    ein per tempfile.mkdtemp() erzeugtes Temp-Verzeichnis statt nach WORK_DIR.
     """
     filename = os.path.basename(file_path)
     logger.info(f"--- VERARBEITE DATEI: {filename} ---")
@@ -63,20 +76,35 @@ def process_single_file(file_path, args=None):
     # eine beliebige lesbare Datei) in IN_DIR wäre sonst ein Primitive dafür,
     # beliebigen Dateiinhalt öffentlich zu YouTube hochzuladen.
     if os.path.islink(file_path):
-        logger.warning(f"⚠️ Symlink wird nicht verarbeitet (Sicherheitsrisiko): {filename}. Verschiebe nach CORRUPT...")
-        _quarantine_symlink(file_path, filename)
+        if manage_files:
+            logger.warning(f"⚠️ Symlink wird nicht verarbeitet (Sicherheitsrisiko): {filename}. Verschiebe nach CORRUPT...")
+            _quarantine_symlink(file_path, filename)
+        else:
+            logger.warning(f"⚠️ Symlink wird nicht verarbeitet (Sicherheitsrisiko): {filename}.")
         return
 
     # Vorab-Prüfung auf Integrität der Quelldatei
     if not is_file_ready_and_valid(file_path):
-        logger.error(f"Datei unvollständig oder ungültig: {filename}. Verschiebe nach CORRUPT...")
-        target_corrupt = resolve_target_path(config.CORRUPT_DIR, filename)
-        shutil.move(file_path, target_corrupt)
+        if manage_files:
+            logger.error(f"Datei unvollständig oder ungültig: {filename}. Verschiebe nach CORRUPT...")
+            target_corrupt = resolve_target_path(config.CORRUPT_DIR, filename)
+            shutil.move(file_path, target_corrupt)
+        else:
+            logger.error(f"Datei unvollständig oder ungültig: {filename}.")
         return
 
-    work_path = resolve_target_path(config.WORK_DIR, filename)
-    logger.info(f"Verschiebe nach WORK: {work_path}")
-    shutil.move(file_path, work_path)
+    split_temp_dir = None
+    split_output_dir = None
+    if manage_files:
+        work_path = resolve_target_path(config.WORK_DIR, filename)
+        logger.info(f"Verschiebe nach WORK: {work_path}")
+        shutil.move(file_path, work_path)
+    else:
+        work_path = file_path
+        # Nur bei tatsächlichem Splitting benötigt; wird unten wieder entfernt,
+        # falls das Video die Maximallänge gar nicht überschreitet.
+        split_temp_dir = tempfile.mkdtemp(prefix="yt-upload-split-")
+        split_output_dir = split_temp_dir
 
     meta = extract_metadata_and_thumb(work_path)
 
@@ -118,7 +146,14 @@ def process_single_file(file_path, args=None):
     open_link = args.open_link if args and hasattr(args, 'open_link') else False
 
     # Splitting-Prüfung ausführen
-    segments = split_video_if_needed(work_path)
+    segments = split_video_if_needed(work_path, output_dir=split_output_dir)
+    was_split = segments != [work_path]
+
+    if split_temp_dir and not was_split:
+        # Kein Splitting nötig gewesen - leeres Temp-Verzeichnis wieder entfernen.
+        with contextlib.suppress(OSError):
+            os.rmdir(split_temp_dir)
+        split_temp_dir = None
 
     # Fortschritt aus einem evtl. vorherigen fehlgeschlagenen Lauf laden (Segment-Dateiname -> Video-ID)
     progress = load_segment_progress(work_path)
@@ -165,7 +200,24 @@ def process_single_file(file_path, args=None):
         except Exception as e:  # noqa: BLE001 - Top-Level-Boundary für den gesamten Segment-Upload; Fehler aus Netzwerk, Dateisystem und API-Logik sollen hier gleichermaßen zu einem sauberen Retry/Corrupt-Handling führen statt den Daemon abstürzen zu lassen
             logger.error(f"Upload-Fehler bei Segment {seg}: {e}")
 
-            if progress:
+            if not manage_files:
+                # Datei bleibt unangetastet liegen - Fortschritt (falls vorhanden) ist
+                # bereits als Sidecar-JSON neben der Originaldatei gespeichert, ein
+                # erneuter Aufruf mit derselben Datei setzt automatisch dort fort.
+                if progress:
+                    logger.warning(
+                        f"{len(progress)} von {len(segments)} Segment(en) bereits erfolgreich hochgeladen. "
+                        f"Datei bleibt unverändert liegen: {file_path}. Erneuter Aufruf setzt fort."
+                    )
+                else:
+                    logger.error(f"Kein Segment erfolgreich hochgeladen. Datei bleibt unverändert liegen: {file_path}.")
+                    clear_segment_progress(work_path)
+                if was_split:
+                    cleanup_work_files(segments, is_error=True)
+                if split_temp_dir:
+                    with contextlib.suppress(OSError):
+                        os.rmdir(split_temp_dir)
+            elif progress:
                 # Mind. ein Segment wurde bereits erfolgreich hochgeladen: NICHT nach CORRUPT verschieben,
                 # sonst gehen Original + Fortschritt-Zuordnung verloren und bereits hochgeladene Segmente
                 # würden bei einem erneuten Lauf ein zweites Mal hochgeladen.
@@ -185,9 +237,17 @@ def process_single_file(file_path, args=None):
                 clear_segment_progress(work_path)
             return
 
-    # Bei Erfolg ins DONE-Verzeichnis verschieben
-    target_done = resolve_target_path(config.DONE_DIR, filename)
-    logger.info(f"Verarbeitung erfolgreich. Verschiebe Original nach DONE: {target_done}")
-    shutil.move(work_path, target_done)
-    cleanup_work_files(segments)
+    if not manage_files:
+        logger.info(f"Verarbeitung erfolgreich. Datei bleibt unverändert liegen: {file_path}")
+        if was_split:
+            cleanup_work_files(segments)
+        if split_temp_dir:
+            with contextlib.suppress(OSError):
+                os.rmdir(split_temp_dir)
+    else:
+        # Bei Erfolg ins DONE-Verzeichnis verschieben
+        target_done = resolve_target_path(config.DONE_DIR, filename)
+        logger.info(f"Verarbeitung erfolgreich. Verschiebe Original nach DONE: {target_done}")
+        shutil.move(work_path, target_done)
+        cleanup_work_files(segments)
     clear_segment_progress(work_path)

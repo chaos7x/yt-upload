@@ -186,11 +186,19 @@ def extract_metadata_and_thumb(file_path):
     return metadata
 
 
-def split_video_if_needed(work_path):
+def split_video_if_needed(work_path, output_dir=None):
     """
     Prüft, ob das Video die Maximallänge (10h) überschreitet.
     Wenn ja, wird es verlustfrei mittels Stream-Copying (-c copy) in mehrere Teile gesplittet.
+
+    output_dir=None (Standard) schreibt Segmente wie bisher nach config.WORK_DIR
+    (Dämon-/Auto-Batch-Modus). Der manuelle CLI-Modus übergibt stattdessen ein
+    eigenes, per tempfile.mkdtemp() erzeugtes Verzeichnis, damit die Quelldatei
+    dabei nicht angefasst/verschoben werden muss.
     """
+    if output_dir is None:
+        output_dir = config.WORK_DIR
+
     try:
         cmd_probe = [
             "ffprobe",
@@ -213,12 +221,12 @@ def split_video_if_needed(work_path):
     logger.info("Video überschreitet 10 Stunden. Starte FFmpeg-Splitting...")
     filename = os.path.basename(work_path)
     base_name, ext = os.path.splitext(filename)
-    segment_pattern = os.path.join(config.WORK_DIR, f"{base_name}_part%02d{ext}")
+    segment_pattern = os.path.join(output_dir, f"{base_name}_part%02d{ext}")
 
     # Alte Segmente entfernen, falls noch vorhanden
-    for item in os.listdir(config.WORK_DIR):
+    for item in os.listdir(output_dir):
         if item.startswith(f"{base_name}_part") and item.endswith(ext):
-            stale_segment = os.path.join(config.WORK_DIR, item)
+            stale_segment = os.path.join(output_dir, item)
             try:
                 os.remove(stale_segment)
             except OSError as e:
@@ -242,7 +250,7 @@ def split_video_if_needed(work_path):
     created_segments = []
     part_idx = 0
     while True:
-        seg_candidate = os.path.join(config.WORK_DIR, f"{base_name}_part{part_idx:02d}{ext}")
+        seg_candidate = os.path.join(output_dir, f"{base_name}_part{part_idx:02d}{ext}")
         if os.path.exists(seg_candidate):
             created_segments.append(seg_candidate)
             part_idx += 1
