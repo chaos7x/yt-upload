@@ -14,6 +14,11 @@ services:
       - TZ=Europe/Berlin
       - ENABLE_DYNAMIC_PLAYLISTS=true
       - HOME=/tmp  # Hält Schreibzugriffe für Caches/Config aus dem :ro gemounteten /app fern
+      # IN_DIR liegt bewusst *innerhalb* des einen yt-upload-data-Mounts unten
+      # statt in einem eigenen Volume - spart einen zweiten Bind-Mount, da
+      # fetchbridge (siehe dessen docker-compose.yaml.example) einfach direkt
+      # in den "in"-Unterordner desselben Host-Verzeichnisses schreiben kann.
+      - IN_DIR=/srv/yt-upload/in
     env_file:
       - .env
     volumes:
@@ -25,12 +30,10 @@ services:
       # sucht das Tool die Client-Secrets nun unter /app/oauth
       - oauth:/app/oauth
 
-      # 3. Eingangs-Verzeichnis - dasselbe Verzeichnis, in das fetchbridges
-      # storage-target schreibt (siehe fetchbridge/docker-compose.yaml.example)
-      - incoming:/srv/media-pipeline/incoming
-
-      # 3b. Privater Arbeits-/Archivzustand (work/done/corrupt/retry) - wird
-      # von keinem anderen Dienst gelesen/geschrieben
+      # 3. Kompletter Datenzustand (in/work/done/corrupt/retry) in einem
+      # einzigen Bind-Mount statt zwei getrennten Volumes - IN_DIR zeigt
+      # oben per ENV auf den "in"-Unterordner, in den fetchbridges
+      # storage-target direkt hineinschreibt (derselbe Host-Pfad + "/in").
       - yt-upload-data:/srv/yt-upload
 
       # 4. Log Verzeichnis
@@ -71,13 +74,6 @@ volumes:
       type: none
       o: bind
       device: "./oauth"
-
-  incoming:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: "./incoming"
 
   yt-upload-data:
     driver: local
