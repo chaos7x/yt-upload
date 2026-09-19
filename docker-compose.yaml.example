@@ -14,11 +14,17 @@ services:
       - TZ=Europe/Berlin
       - ENABLE_DYNAMIC_PLAYLISTS=true
       - HOME=/tmp  # Hält Schreibzugriffe für Caches/Config aus dem :ro gemounteten /app fern
-      # IN_DIR liegt bewusst *innerhalb* des einen yt-upload-data-Mounts unten
-      # statt in einem eigenen Volume - spart einen zweiten Bind-Mount, da
-      # fetchbridge (siehe dessen docker-compose.yaml.example) einfach direkt
-      # in den "in"-Unterordner desselben Host-Verzeichnisses schreiben kann.
+      # Alle fünf biegen bewusst auf Unterordner des einen yt-upload-data-
+      # Mounts unten um, statt jeweils ein eigenes Volume zu bekommen - der
+      # Code-Default liegt sonst einheitlich unter /srv/media-pipeline/*
+      # (siehe config.py), was hier aber einen zusätzlichen Bind-Mount pro
+      # Verzeichnis bedeuten würde. IN_DIR ist der einzige davon, in den auch
+      # fetchbridge hineinschreibt (siehe dessen docker-compose.yaml.example).
       - IN_DIR=/srv/yt-upload/in
+      - WORK_DIR=/srv/yt-upload/work
+      - DONE_DIR=/srv/yt-upload/done
+      - CORRUPT_DIR=/srv/yt-upload/corrupt
+      - RETRY_DIR=/srv/yt-upload/retry
     env_file:
       - .env
     volumes:
@@ -31,9 +37,8 @@ services:
       - oauth:/app/oauth
 
       # 3. Kompletter Datenzustand (in/work/done/corrupt/retry) in einem
-      # einzigen Bind-Mount statt zwei getrennten Volumes - IN_DIR zeigt
-      # oben per ENV auf den "in"-Unterordner, in den fetchbridges
-      # storage-target direkt hineinschreibt (derselbe Host-Pfad + "/in").
+      # einzigen Bind-Mount - die ENV-Variablen oben biegen die einzelnen
+      # Verzeichnisse auf die passenden Unterordner um.
       - yt-upload-data:/srv/yt-upload
 
       # 4. Log Verzeichnis

@@ -78,6 +78,10 @@ docker run -d \
   -e ENABLE_DYNAMIC_PLAYLISTS=true \
   -e HOME=/tmp \
   -e IN_DIR=/srv/yt-upload/in \
+  -e WORK_DIR=/srv/yt-upload/work \
+  -e DONE_DIR=/srv/yt-upload/done \
+  -e CORRUPT_DIR=/srv/yt-upload/corrupt \
+  -e RETRY_DIR=/srv/yt-upload/retry \
   -v $(pwd)/oauth:/app/oauth:rw \
   -v $(pwd)/yt-upload-data:/srv/yt-upload:rw \
   -v $(pwd)/log:/log:rw \
@@ -103,9 +107,14 @@ services:
       - HOME=/tmp
       - ENABLE_DESCRIPTION_CENSOR=true
       - DESCRIPTION_BLACKLIST=onlyfans.com,fansly.com,loyalfans.com,manyvids.com,pornhub.com,chaturbate.com,stake.com,csgoroll.com,hellcase.com,1xbet.com,adf.ly,shorte.st
-      # IN_DIR liegt bewusst innerhalb des einen yt-upload-data-Mounts unten
-      # statt in einem eigenen Volume - spart einen zweiten Bind-Mount
+      # Alle fünf biegen bewusst auf Unterordner des einen yt-upload-data-
+      # Mounts unten um, statt jeweils ein eigenes Volume zu bekommen (der
+      # Code-Default liegt sonst einheitlich unter /srv/media-pipeline/*)
       - IN_DIR=/srv/yt-upload/in
+      - WORK_DIR=/srv/yt-upload/work
+      - DONE_DIR=/srv/yt-upload/done
+      - CORRUPT_DIR=/srv/yt-upload/corrupt
+      - RETRY_DIR=/srv/yt-upload/retry
     env_file:
       - .env
     volumes:
@@ -182,7 +191,7 @@ wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload-dae
 apt install ./yt-upload-daemon_<version>_all.deb
 ```
 
-Das Daemon-Paket legt den Systemuser und den systemd-Service an, startet ihn aber bewusst nicht automatisch. `IN_DIR` zeigt ohne ein `/videos`-Volume (wie im Docker-Setup) automatisch auf `/srv/media-pipeline/incoming` - dasselbe Verzeichnis, in das `fetchbridge`s `TARGET_DIR` schreibt, das `.deb`-Postinst legt es mit der gemeinsamen Gruppe (`media-pipeline`) an. `WORK_DIR`/`DONE_DIR`/`CORRUPT_DIR`/`RETRY_DIR` liegen entsprechend unter dem privaten `/srv/yt-upload/`. Wer davon abweichende Pfade will, kann sie wie gehabt über `[paths]` in `/etc/yt-upload/upload.conf` überschreiben. Vor dem ersten Start noch `get-token` einmalig manuell ausführen (kein Service, siehe oben), dann:
+Das Daemon-Paket legt den Systemuser und den systemd-Service an, startet ihn aber bewusst nicht automatisch. `IN_DIR`/`WORK_DIR`/`DONE_DIR`/`CORRUPT_DIR`/`RETRY_DIR` zeigen ohne ein `/videos`-Volume (wie im Docker-Setup) automatisch einheitlich auf `/srv/media-pipeline/{incoming,work,done,corrupt,retry}` - `IN_DIR` ist davon dasselbe Verzeichnis, in das `fetchbridge`s `TARGET_DIR` schreibt, die anderen vier sind rein interner Zustand. Das `.deb`-Postinst legt alle fünf mit der gemeinsamen Gruppe (`media-pipeline`) an. Wer davon abweichende Pfade will, kann sie wie gehabt über `[paths]` in `/etc/yt-upload/upload.conf` überschreiben. Vor dem ersten Start noch `get-token` einmalig manuell ausführen (kein Service, siehe oben), dann:
 
 ```bash
 systemctl enable --now yt-upload
@@ -243,18 +252,18 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
 #in_dir = /srv/media-pipeline/incoming
 
 # Temporäres Arbeitsverzeichnis während der Verarbeitung/Splittings
-#work_dir = /srv/yt-upload/work
+#work_dir = /srv/media-pipeline/work
 
 # Zielverzeichnis für erfolgreich hochgeladene und archivierte Dateien
-#done_dir = /srv/yt-upload/done
+#done_dir = /srv/media-pipeline/done
 
 # Zielverzeichnis für fehlerhafte oder unvollständige Dateien
-#corrupt_dir = /srv/yt-upload/corrupt
+#corrupt_dir = /srv/media-pipeline/corrupt
 
 # Zielverzeichnis für Dateien, bei denen bereits mind. ein Segment erfolgreich
 # hochgeladen wurde, bevor ein Fehler auftrat (getrennt von corrupt_dir, um
 # Doppel-Uploads bereits hochgeladener Segmente bei einem erneuten Lauf zu vermeiden)
-#retry_dir = /srv/yt-upload/retry
+#retry_dir = /srv/media-pipeline/retry
 
 # Pfad zur zentralen Logdatei
 #log_file = /log/upload.log
@@ -390,12 +399,12 @@ Sämtliche Pfade aus dem `[paths]`-Abschnitt der `upload.conf` (siehe oben) lass
 ## 📂 Verzeichnisstruktur im Container
 
 * `/srv/media-pipeline/incoming`: Eingangsverzeichnis für neue Videodateien - dasselbe Verzeichnis, in das `fetchbridge`s `TARGET_DIR` schreibt.
-* `/srv/yt-upload/work`: Temporäres Arbeitsverzeichnis während Analyse, Splitting und Upload.
-* `/srv/yt-upload/done`: Archivverzeichnis für erfolgreich verarbeitete Originaldateien.
-* `/srv/yt-upload/corrupt`: Zielverzeichnis für beschädigte, nicht lesbare oder komplett fehlgeschlagene Videodateien.
-* `/srv/yt-upload/retry`: Zielverzeichnis für Dateien mit Teilfortschritt (mind. ein Segment bereits hochgeladen, dann ein Fehler) - manuell zurück nach `/srv/media-pipeline/incoming` verschieben, um den Rest nachzuholen.
+* `/srv/media-pipeline/work`: Temporäres Arbeitsverzeichnis während Analyse, Splitting und Upload.
+* `/srv/media-pipeline/done`: Archivverzeichnis für erfolgreich verarbeitete Originaldateien.
+* `/srv/media-pipeline/corrupt`: Zielverzeichnis für beschädigte, nicht lesbare oder komplett fehlgeschlagene Videodateien.
+* `/srv/media-pipeline/retry`: Zielverzeichnis für Dateien mit Teilfortschritt (mind. ein Segment bereits hochgeladen, dann ein Fehler) - manuell zurück nach `/srv/media-pipeline/incoming` verschieben, um den Rest nachzuholen.
 
-Für bestehende Setups mit einem einzelnen `/videos`-Volume (mit `in`/`work`/`done`/`corrupt`/`retry`-Unterordnern) funktioniert das weiterhin unverändert - neue Deployments sollten aber die Pfade oben verwenden.
+`work`/`done`/`corrupt`/`retry` sind rein interner Zustand von yt-upload - kein anderer Dienst liest oder schreibt dort, sie liegen nur der Einfachheit halber im selben `/srv/media-pipeline`-Namespace wie `incoming`. Für bestehende Setups mit einem einzelnen `/videos`-Volume (mit `in`/`work`/`done`/`corrupt`/`retry`-Unterordnern) funktioniert das weiterhin unverändert - neue Deployments sollten aber die Pfade oben verwenden.
 
 ---
 

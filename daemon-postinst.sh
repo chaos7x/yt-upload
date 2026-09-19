@@ -21,16 +21,9 @@ if ! getent group media-pipeline >/dev/null 2>&1; then
 fi
 adduser yt-upload media-pipeline
 
-mkdir -p /srv/media-pipeline/recordings /srv/media-pipeline/incoming
-chown root:media-pipeline /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipeline/incoming
-chmod 2775 /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipeline/incoming
-
-# WORK_DIR/DONE_DIR/CORRUPT_DIR/RETRY_DIR sind rein interner Zustand von
-# yt-upload (kein anderer Dienst liest/schreibt dort) - eigenes, privates
-# Verzeichnis statt der gemeinsamen Gruppe von oben.
-mkdir -p /srv/yt-upload/work /srv/yt-upload/done /srv/yt-upload/corrupt /srv/yt-upload/retry
-chown -R yt-upload:yt-upload /srv/yt-upload
-chmod -R 0750 /srv/yt-upload
+mkdir -p /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry
+chown root:media-pipeline /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry
+chmod 2775 /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry
 
 # /run/systemd/system existiert nur, wenn systemd tatsaechlich als Init-System
 # laeuft (nicht z.B. in einem Chroot/Container-Build ohne systemd) - ohne

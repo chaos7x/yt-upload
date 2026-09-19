@@ -8,16 +8,16 @@
 #in_dir = /srv/media-pipeline/incoming
 
 # Temporäres Arbeitsverzeichnis während der Verarbeitung/Splittings
-#work_dir = /srv/yt-upload/work
+#work_dir = /srv/media-pipeline/work
 
 # Zielverzeichnis für erfolgreich hochgeladene und archivierte Dateien
-#done_dir = /srv/yt-upload/done
+#done_dir = /srv/media-pipeline/done
 
 # Zielverzeichnis für fehlerhafte oder unvollständige Dateien
-#corrupt_dir = /srv/yt-upload/corrupt
+#corrupt_dir = /srv/media-pipeline/corrupt
 
 # Zielverzeichnis für Dateien aus diversen gründen noch mal hochgeladen weden müssen
-#retry_dir = /srv/yt-upload/retry
+#retry_dir = /srv/media-pipeline/retry
 
 # Pfad zur zentralen Logdatei
 #log_file = /log/upload.log
