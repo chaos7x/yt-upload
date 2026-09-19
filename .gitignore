@@ -4,6 +4,7 @@ videos/
 oauth/
 app/
 config/
+yt-upload-data/
 
 # Lokale Tooling-Konfiguration ausschließen
 .github/agents/
