@@ -43,7 +43,7 @@ def parse_arguments(argv=None):
              "Dateien werden diese nacheinander mit denselben Metadaten hochgeladen (siehe --title-template)."
     )
     parser.add_argument("-a", "--auto", action="store_true", help="Automatischer Batch-Modus für ein Verzeichnis")
-    parser.add_argument("-D", "--daemon", action="store_true", help="Dämon-Modus: Dauerhafte inotify-Verzeichnisüberwachung")
+    parser.add_argument("-D", "--daemon", action="store_true", help="Dämon-Modus: Dauerhafte inotify-Verzeichnisüberwachung (benötigt zusätzlich das Paket yt-upload-daemon)")
     parser.add_argument("--healthcheck", action="store_true", help="Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort (für Docker HEALTHCHECK)")
 
     parser.add_argument("-t", "--title", help="Video-Titel (Standard: Metadaten/Dateiname)")
@@ -134,7 +134,7 @@ def main():
         print("  - Einzelne Datei:  yt-upload /pfad/zum/video.mp4")
         print("  - Mehrere Dateien: yt-upload video1.mp4 video2.mp4 ...")
         print("  - Auto-Pipeline:   yt-upload -a")
-        print("  - Dämon-Modus:     yt-upload -D")
+        print("  - Dämon-Modus:     yt-upload -D (benötigt zusätzlich das Paket yt-upload-daemon)")
         print("\nNutze -h oder --help für alle Optionen.")
         return
 
