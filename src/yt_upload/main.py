@@ -145,7 +145,7 @@ def main():
     # manuelle Datei-Modus verarbeitet die übergebene(n) Datei(en) an Ort und
     # Stelle (process_single_file(..., manage_files=False)) und braucht diese
     # Verzeichnisse daher nicht - wichtig für professionelle CLI-Nutzung, wo
-    # weder ein gemountetes /videos-Volume noch eine upload.conf existiert.
+    # weder ein /srv/media-pipeline-Setup noch eine upload.conf existiert.
     if args.auto or args.daemon:
         ensure_directories()
 
