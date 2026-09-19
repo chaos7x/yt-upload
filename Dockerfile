@@ -66,6 +66,21 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# ------------------------------------------
+# LAYER 2b: Dedizierter Non-Root-User
+# ------------------------------------------
+# Gehärtetes Image: laeuft standardmaessig nicht als root, auch wenn beim
+# Deploy kein `user:`/`-u` gesetzt wird. UID/GID bewusst NICHT fest kodiert -
+# useradd/groupadd (statt adduser, das im -slim-Base-Image fehlt und den
+# Build mit "exit code: 127" scheitern liess) waehlen automatisch eine freie
+# System-UID <1000. Wer die UID an sein eigenes Setup anpassen will (z.B.
+# fuer Bind-Mount-Rechte), ueberschreibt sie ganz normal per `docker run -u`/
+# Compose `user:` - die 1777-Verzeichnisse unten bleiben davon unabhaengig
+# fuer jede UID beschreibbar.
+RUN groupadd --system yt-upload \
+    && useradd --system --no-create-home --home /nonexistent \
+        --shell /usr/sbin/nologin --gid yt-upload yt-upload
+
 # Arbeitsverzeichnis & Home-Variable setzen
 WORKDIR /app
 ENV HOME=/app
@@ -103,6 +118,11 @@ COPY upload.conf.example /etc/yt-upload/upload.conf
 # ------------------------------------------
 RUN ln -s /etc/global.bashrc /tmp/.bashrc \
     && ln -s /etc/global.bashrc /app/.bashrc
+
+# /app gehoert dem dedizierten User statt root, damit HOME=/app (siehe oben)
+# fuer ihn tatsaechlich beschreibbar ist.
+RUN chown yt-upload:yt-upload /app
+USER yt-upload
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD ["/usr/local/bin/yt-upload", "--healthcheck"]
