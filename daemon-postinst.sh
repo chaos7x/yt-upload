@@ -1,7 +1,8 @@
 #!/bin/sh
-# Wird von dpkg nach dem Entpacken des .deb ausgefuehrt (fpm --after-install).
-# Betrifft nur den Daemon-Modus (yt-upload.service) - get-token ist ein
-# einmaliges, interaktives Setup-Tool und laeuft nie als Systemd-Service.
+# Wird von dpkg nach dem Entpacken des yt-upload-daemon .deb ausgefuehrt
+# (fpm --after-install). Das eigentliche yt-upload-Package (CLI) hat kein
+# eigenes postinst - Systemuser und systemd-Service sind reine
+# Daemon-Modus-Angelegenheiten, get-token laeuft ohnehin nie als Service.
 set -e
 
 if ! getent passwd yt-upload >/dev/null 2>&1; then
@@ -17,7 +18,7 @@ if [ -d /run/systemd/system ]; then
 fi
 
 echo ""
-echo "yt-upload wurde installiert, der systemd-Service ist aber noch NICHT aktiviert."
+echo "yt-upload-daemon wurde installiert, der systemd-Service ist aber noch NICHT aktiviert."
 echo "Bitte zuerst [paths] in /etc/yt-upload/upload.conf setzen und einmalig"
 echo "'get-token' ausfuehren, dann den Dienst manuell aktivieren und starten:"
 echo ""

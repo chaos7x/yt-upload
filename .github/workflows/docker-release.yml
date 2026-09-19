@@ -145,7 +145,7 @@ jobs:
       - name: Package per pip in ein Zielverzeichnis installieren
         run: python3 -m pip install --no-deps --no-cache-dir --target=install .
 
-      - name: .deb-Verzeichnisstruktur aufbauen
+      - name: .deb-Verzeichnisstrukturen aufbauen
         run: |
           VERSION="${{ needs.build-and-push.outputs.version }}"
           echo "DEB_VERSION=${VERSION#v}" >> "$GITHUB_ENV"
@@ -156,6 +156,14 @@ jobs:
           sed -i '1s|.*|#!/usr/bin/python3|' install/bin/yt-upload install/bin/get-token
           rm -rf install/yt_upload/__pycache__ install/get_token/__pycache__
 
+          # Zwei getrennte .deb-Pakete statt einem: "yt-upload" enthaelt CLI,
+          # Python-Package und Config (alles, was auch der rein manuelle
+          # Datei-Modus braucht), "yt-upload-daemon" nur den systemd-Service
+          # samt Systemuser-Anlage. So zieht sich ein reiner CLI-User (der nur
+          # `yt-upload video.mp4` aufruft) nicht automatisch python3-inotify,
+          # den dedizierten Systemuser und den nie aktivierten systemd-Service
+          # mit rein.
+
           # /usr/lib/python3/dist-packages statt eines eigenen PYTHONPATH-
           # Verzeichnisses (wie im Dockerfile) - das ist bei einem .deb der
           # Standard-Suchpfad von Debians System-Python, beide Packages sind
@@ -164,16 +172,18 @@ jobs:
           # installierter Entry-Point statt als bare-copy-Skript - für ein
           # .deb, das ohnehin das ganze Package installiert, unnötig, das
           # nachzubilden.
-          mkdir -p pkgroot/usr/bin pkgroot/usr/lib/python3/dist-packages pkgroot/etc/yt-upload/conf.d pkgroot/usr/lib/systemd/system
-          cp install/bin/yt-upload install/bin/get-token pkgroot/usr/bin/
-          chmod 755 pkgroot/usr/bin/yt-upload pkgroot/usr/bin/get-token
-          cp -r install/yt_upload pkgroot/usr/lib/python3/dist-packages/yt_upload
-          cp -r install/get_token pkgroot/usr/lib/python3/dist-packages/get_token
-          cp -r install/yt_upload-*.dist-info pkgroot/usr/lib/python3/dist-packages/
-          cp upload.conf.example pkgroot/etc/yt-upload/upload.conf
-          cp yt-upload.service pkgroot/usr/lib/systemd/system/yt-upload.service
+          mkdir -p pkgroot-cli/usr/bin pkgroot-cli/usr/lib/python3/dist-packages pkgroot-cli/etc/yt-upload/conf.d
+          cp install/bin/yt-upload install/bin/get-token pkgroot-cli/usr/bin/
+          chmod 755 pkgroot-cli/usr/bin/yt-upload pkgroot-cli/usr/bin/get-token
+          cp -r install/yt_upload pkgroot-cli/usr/lib/python3/dist-packages/yt_upload
+          cp -r install/get_token pkgroot-cli/usr/lib/python3/dist-packages/get_token
+          cp -r install/yt_upload-*.dist-info pkgroot-cli/usr/lib/python3/dist-packages/
+          cp upload.conf.example pkgroot-cli/etc/yt-upload/upload.conf
 
-      - name: .deb bauen
+          mkdir -p pkgroot-daemon/usr/lib/systemd/system
+          cp yt-upload.service pkgroot-daemon/usr/lib/systemd/system/yt-upload.service
+
+      - name: yt-upload (CLI) .deb bauen
         run: |
           fpm -s dir -t deb -f \
             -n yt-upload \
@@ -181,21 +191,35 @@ jobs:
             -a all \
             --license GPL-3.0 \
             --maintainer "chaos7x" \
-            --description "Automatisierter YouTube Upload Workflow" \
+            --description "Automatisierter YouTube Upload Workflow (CLI)" \
             --url "https://github.com/${{ github.repository }}" \
             --depends python3 \
             --depends python3-requests \
             --depends ffmpeg \
-            --depends adduser \
-            --deb-recommends python3-inotify \
             --config-files /etc/yt-upload/upload.conf \
-            --after-install postinst.sh \
-            --before-remove prerm.sh \
-            --after-remove postrm.sh \
-            -C pkgroot \
+            -C pkgroot-cli \
             usr etc
 
-      - name: .deb als Release-Asset hochladen
+      - name: yt-upload-daemon .deb bauen
+        run: |
+          fpm -s dir -t deb -f \
+            -n yt-upload-daemon \
+            -v "$DEB_VERSION" \
+            -a all \
+            --license GPL-3.0 \
+            --maintainer "chaos7x" \
+            --description "Systemd-Dienst fuer den yt-upload-Daemon-Modus (yt-upload -D)" \
+            --url "https://github.com/${{ github.repository }}" \
+            --depends "yt-upload = $DEB_VERSION" \
+            --depends python3-inotify \
+            --depends adduser \
+            --after-install daemon-postinst.sh \
+            --before-remove daemon-prerm.sh \
+            --after-remove daemon-postrm.sh \
+            -C pkgroot-daemon \
+            usr
+
+      - name: .deb-Pakete als Release-Assets hochladen
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.build-and-push.outputs.version }}
