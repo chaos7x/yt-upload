@@ -201,8 +201,8 @@ def load_configuration(log_changes=False):
         try:
             rel_name = os.path.relpath(cfg, os.path.dirname(CONF_PATH)) if CONF_PATH else os.path.basename(cfg)
             file_list_names.append(rel_name)
-            hasher.update(cfg.encode('utf-8'))
-            hasher.update(str(os.path.getmtime(cfg)).encode('utf-8'))
+            hasher.update(cfg.encode())
+            hasher.update(str(os.path.getmtime(cfg)).encode())
             with open(cfg, 'rb') as f:
                 hasher.update(f.read())
         except OSError:

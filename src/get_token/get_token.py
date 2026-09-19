@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-# ruff: noqa: EXE001 - Shebang ist reine Bequemlichkeit für optionale direkte
-# Ausführung (./get_token.py); das eigentliche Ausführbar-Bit übersteht
-# Git-Checkouts/Web-Uploads nicht zuverlässig, das Skript läuft ganz normal
-# auch via `python3 get_token.py` ohne +x.
 
 import json
 import os
 import secrets
 import sys
 import webbrowser
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -91,7 +87,7 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
         self.wfile.write(
             "<html><body><h1>Authentifizierung abgeschlossen.</h1>"
             "<p>Du kannst dieses Fenster jetzt schließen und zum Terminal zurückkehren.</p>"
-            "</body></html>".encode("utf-8")
+            "</body></html>".encode()
         )
 
     def log_message(self, fmt, *args):
@@ -204,7 +200,7 @@ def main():
         
         # Datumsformatierung mit Fallback, falls credentials.expiry None ist
         expires_in = int(token_response.get("expires_in", 3600))
-        expiry_str = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        expiry_str = (datetime.now(UTC) + timedelta(seconds=expires_in)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Tatsächlich von Google gewährten Scope verwenden statt blind der
         # angeforderten SCOPES, falls Google (z.B. bei partieller Zustimmung)
