@@ -78,7 +78,8 @@ ENV HOME=/app
 # daher müssen beide Verzeichnisse für jede UID beschreibbar bleiben. Das
 # Sticky-Bit (wie bei /tmp) verhindert aber, dass ein Prozess/Nutzer Dateien
 # löschen oder umbenennen kann, die ein anderer angelegt hat.
-RUN mkdir -p /videos /log /etc/yt-upload/conf.d && chmod 1777 /videos /log
+RUN mkdir -p /videos /log /etc/yt-upload/conf.d /srv/media-pipeline/incoming /srv/yt-upload/work /srv/yt-upload/done /srv/yt-upload/corrupt /srv/yt-upload/retry \
+    && chmod 1777 /videos /log /srv/media-pipeline/incoming /srv/yt-upload/work /srv/yt-upload/done /srv/yt-upload/corrupt /srv/yt-upload/retry
 
 # ------------------------------------------
 # LAYER 4: Lokale Skripte, Package & Configs kopieren
