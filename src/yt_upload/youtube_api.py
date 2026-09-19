@@ -126,6 +126,39 @@ class _UploadProgressBar:
         sys.stderr.flush()
 
 
+def _probe_upload_offset(session, upload_url, access_token, file_size, timeout=60):
+    """
+    Fragt bei einem unklaren Chunk-Fehler (z.B. "Failed to parse Content-Range
+    header" - ein bekannter, gelegentlich transienter Ausrutscher der YouTube-
+    API, kein echter Client-Bug) den tatsächlichen Stand der Resumable-Upload-
+    Session bei Google ab, statt blind erneut zu senden oder sofort
+    aufzugeben: leerer PUT-Body mit `Content-Range: bytes */{file_size}` ist
+    laut Google-Doku das vorgesehene Verfahren, um den echten Server-Offset
+    zu erfragen. Gibt (video_id, uploaded_bytes) zurück - video_id ist None,
+    solange der Upload laut Server noch nicht abgeschlossen ist.
+    """
+    probe_headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Range": f"bytes */{file_size}",
+        "Content-Length": "0",
+    }
+    probe_res = session.put(upload_url, headers=probe_headers, data=b"", timeout=timeout)
+
+    if probe_res.status_code in (200, 201):
+        return probe_res.json().get("id"), file_size
+
+    if probe_res.status_code == 308:
+        range_hdr = probe_res.headers.get("Range")
+        if range_hdr and "-" in range_hdr:
+            try:
+                return None, int(range_hdr.split("-")[1]) + 1
+            except (ValueError, IndexError):
+                pass
+        return None, 0
+
+    raise RuntimeError(f"Status-Check fehlgeschlagen ({probe_res.status_code}): {probe_res.text[:500]}")
+
+
 def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.VIDEO_PRIVACY,
                            cred_file=None, client_secrets_file=None):
     """
@@ -491,6 +524,44 @@ def upload_single_video(
                             f"Unerwarteter Status {put_res.status_code} beim Chunk-Upload "
                             f"(Versuch {attempt}/{max_retries}): {put_res.text[:500]}"
                         )
+
+                        # "Failed to parse Content-Range header": bekannter, gelegentlich
+                        # transienter Ausrutscher der YouTube-API (v.a. beim letzten Chunk
+                        # sehr grosser Uploads), kein echter Client-Bug - statt das wie einen
+                        # dauerhaften Fehler zu behandeln und die ganze Datei zu verwerfen,
+                        # den tatsaechlichen Serverstand per Status-Check abfragen und von
+                        # dort weitermachen.
+                        if put_res.status_code == 400 and "Content-Range" in put_res.text:
+                            try:
+                                probe_video_id, probe_uploaded = _probe_upload_offset(
+                                    session, upload_url, access_token, file_size
+                                )
+                            except (requests.exceptions.RequestException, RuntimeError) as probe_err:
+                                logger.warning(f"Status-Check nach Content-Range-Fehler fehlgeschlagen: {probe_err}")
+                            else:
+                                if probe_video_id:
+                                    video_id = probe_video_id
+                                    uploaded_bytes = file_size
+                                    chunk_success = True
+                                    write_heartbeat()
+                                    if progress_bar:
+                                        progress_bar.finish()
+                                    logger.info(
+                                        f"Upload war laut Status-Check bereits abgeschlossen! Video-ID: {video_id}"
+                                    )
+                                    break
+
+                                uploaded_bytes = probe_uploaded
+                                if uploaded_bytes < file_size and uploaded_bytes % config.CHUNK_UNIT_BYTES != 0:
+                                    uploaded_bytes = (uploaded_bytes // config.CHUNK_UNIT_BYTES) * config.CHUNK_UNIT_BYTES
+                                logger.warning(
+                                    "Content-Range-Fehler war vermutlich transient - Serverstand laut "
+                                    f"Status-Check: {uploaded_bytes / (1024 * 1024):.1f} MB. Setze fort..."
+                                )
+                                chunk_success = True
+                                write_heartbeat()
+                                break
+
                         # Dauerhafte Client-Fehler (z.B. 400 ungültige Metadaten, 404 Session weg)
                         # lassen sich durch Wiederholen nicht beheben -> sofort abbrechen statt 5x zu retryen
                         if 400 <= put_res.status_code < 500 and put_res.status_code not in (401, 403, 408, 429):
