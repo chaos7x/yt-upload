@@ -62,7 +62,7 @@ target-version = "py311"
 preview = true
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "LOG", "BLE", "PLW1510", "DTZ", "SIM", "PIE", "C4", "EXE"]
+select = ["E", "F", "I", "LOG", "BLE", "PLW1510", "DTZ", "SIM", "PIE", "C4", "EXE", "UP"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]

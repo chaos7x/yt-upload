@@ -22,7 +22,7 @@ def is_syslog_daemon_running():
         if not pid.isdigit():
             continue
         try:
-            with open(f"/proc/{pid}/comm", "r") as f:
+            with open(f"/proc/{pid}/comm") as f:
                 name = f.read().strip()
             if name in ("rsyslogd", "syslog-ng", "syslogd"):
                 return True

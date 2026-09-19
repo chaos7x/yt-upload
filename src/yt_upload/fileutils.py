@@ -68,7 +68,7 @@ def load_segment_progress(work_path):
     if not os.path.isfile(progress_path):
         return {}
     try:
-        with open(progress_path, "r", encoding="utf-8") as f:
+        with open(progress_path, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError) as e:

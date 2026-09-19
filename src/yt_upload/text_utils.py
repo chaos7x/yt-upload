@@ -6,7 +6,7 @@ Sanitizing und Zensur.
 import logging
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from yt_upload import config
 
@@ -80,11 +80,11 @@ def normalize_recording_date(value):
     value = str(value).strip()
 
     if re.fullmatch(r"\d{8}", value):
-        parsed = datetime.strptime(value, "%Y%m%d").replace(tzinfo=timezone.utc)
+        parsed = datetime.strptime(value, "%Y%m%d").replace(tzinfo=UTC)
         return parsed.isoformat().replace("+00:00", "Z")
 
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-        parsed = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        parsed = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=UTC)
         return parsed.isoformat().replace("+00:00", "Z")
 
     return value

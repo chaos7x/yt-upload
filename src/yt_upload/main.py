@@ -91,7 +91,7 @@ def _apply_description_file(args):
     if not os.path.exists(args.description_file):
         logger.error(f"Angegebene Beschreibungsdatei existiert nicht: {args.description_file}")
         sys.exit(1)
-    with open(args.description_file, "r", encoding="utf-8") as f:
+    with open(args.description_file, encoding="utf-8") as f:
         args.description = f.read()
 
 
