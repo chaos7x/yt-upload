@@ -59,14 +59,25 @@ def _is_dedicated_mount(path):
 # App sonst faelschlich "Container-Modus" annehmen und in den fluechtigen
 # Container-Layer statt auf einen Bare-Metal-Pfad schreiben (derselbe Bug wie
 # bei /log, siehe _default_log_file()).
+#
+# IN_DIR zeigt im Bare-Metal-Fallback bewusst auf das gemeinsame
+# Uebergabeverzeichnis der Pipeline (/srv/media-pipeline/incoming) statt auf
+# einen rein privaten, Package-relativen Pfad: yt-upload ist hier nur der
+# Leser, fetchbridge schreibt in genau denselben Pfad (dessen TARGET_DIR) -
+# identisch zum Docker-Compose-Setup, wo beide Container denselben Host-Pfad
+# mounten. WORK_DIR/DONE_DIR/CORRUPT_DIR/RETRY_DIR sind dagegen rein interner
+# Zustand von yt-upload selbst (kein anderer Dienst liest/schreibt dort) und
+# bleiben deshalb unter einem privaten, yt-upload-eigenen Pfad. Das
+# .deb-Postinst legt IN_DIR mit einer gemeinsamen Gruppe an, damit sowohl
+# fetchbridge als auch yt-upload tatsaechlich zugreifen koennen.
 _videos_mounted = _is_dedicated_mount("/videos")
-IN_DIR = os.environ.get('IN_DIR', "/videos/in" if _videos_mounted else os.path.join(BASE_DIR, "videos", "in"))
-WORK_DIR = os.environ.get('WORK_DIR', "/videos/work" if _videos_mounted else os.path.join(BASE_DIR, "videos", "work"))
-DONE_DIR = os.environ.get('DONE_DIR', "/videos/done" if _videos_mounted else os.path.join(BASE_DIR, "videos", "done"))
-CORRUPT_DIR = os.environ.get('CORRUPT_DIR', "/videos/corrupt" if _videos_mounted else os.path.join(BASE_DIR, "videos", "corrupt"))
+IN_DIR = os.environ.get('IN_DIR', "/videos/in" if _videos_mounted else "/srv/media-pipeline/incoming")
+WORK_DIR = os.environ.get('WORK_DIR', "/videos/work" if _videos_mounted else "/srv/yt-upload/work")
+DONE_DIR = os.environ.get('DONE_DIR', "/videos/done" if _videos_mounted else "/srv/yt-upload/done")
+CORRUPT_DIR = os.environ.get('CORRUPT_DIR', "/videos/corrupt" if _videos_mounted else "/srv/yt-upload/corrupt")
 # Für Dateien, bei denen bereits mind. ein Segment erfolgreich hochgeladen wurde, bevor ein Fehler auftrat.
 # Getrennt von CORRUPT_DIR, damit kein versehentlicher Doppel-Upload bereits hochgeladener Segmente droht.
-RETRY_DIR = os.environ.get('RETRY_DIR', "/videos/retry" if _videos_mounted else os.path.join(BASE_DIR, "videos", "retry"))
+RETRY_DIR = os.environ.get('RETRY_DIR', "/videos/retry" if _videos_mounted else "/srv/yt-upload/retry")
 
 DEBUG_MODE = os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1')
 os.environ['DEBUG'] = '1' if DEBUG_MODE else '0'

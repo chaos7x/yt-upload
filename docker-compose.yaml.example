@@ -25,8 +25,13 @@ services:
       # sucht das Tool die Client-Secrets nun unter /app/oauth
       - oauth:/app/oauth
 
-      # 3. Video-Verzeichnis (Pflicht für ffmpeg und inotify)
-      - videos:/videos
+      # 3. Eingangs-Verzeichnis - dasselbe Verzeichnis, in das fetchbridges
+      # storage-target schreibt (siehe fetchbridge/docker-compose.yaml.example)
+      - incoming:/srv/media-pipeline/incoming
+
+      # 3b. Privater Arbeits-/Archivzustand (work/done/corrupt/retry) - wird
+      # von keinem anderen Dienst gelesen/geschrieben
+      - yt-upload-data:/srv/yt-upload
 
       # 4. Log Verzeichnis
       - log:/log
@@ -67,12 +72,19 @@ volumes:
       o: bind
       device: "./oauth"
 
-  videos:
+  incoming:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: "./videos"
+      device: "./incoming"
+
+  yt-upload-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "./yt-upload-data"
 
   log:
     driver: local
