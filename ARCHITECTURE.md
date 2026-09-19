@@ -5,55 +5,93 @@ Dieses Dokument beschreibt den Aufbau von `yt-upload` auf Modulebene: welche Kom
 ## Überblick
 
 ```mermaid
-flowchart TB
-    subgraph EB["Einstieg & Betrieb"]
-        MAIN["CLI-Modi<br/>[main.py]"]
-        CFG["Konfiguration<br/>[config.py]"]
-        DAEMON["Inotify/Polling<br/>[daemon.py]"]
-        HEALTH["Healthcheck<br/>[healthcheck.py]"]
-        MAIN -->|lädt Konfiguration| CFG
-        MAIN -->|startet Daemon -D| DAEMON
-        MAIN -->|prüft Status --healthcheck| HEALTH
-        DAEMON -->|aktualisiert Heartbeat| HEALTH
-    end
+flowchart TD
 
-    subgraph MV["Medienverarbeitung"]
-        PIPE["Upload-Pipeline<br/>[pipeline.py]"]
-        MEDIA["FFmpeg-Medienlogik<br/>[media.py]"]
-        TEXT["Textaufbereitung<br/>[text_utils.py]"]
-        PIPE -->|prüft/extrahiert, splittet ab 10h| MEDIA
-        PIPE -->|sanitized Titel/Beschreibung| TEXT
-    end
+subgraph group_entry["Entry Modes"]
+  node_main["CLI Entry<br/>[main.py]"]
+  node_daemon["Directory Watcher<br/>[daemon.py]"]
+end
 
-    subgraph YT["YouTube-Integration"]
-        OAUTH["OAuth-Setup<br/>[get_token.py]"]
-        API["YouTube API v3<br/>[youtube_api.py]"]
-    end
+subgraph group_processing["Media Processing"]
+  node_pipeline["Upload Pipeline<br/>[pipeline.py]"]
+  node_media["Media Processing<br/>[media.py]"]
+end
 
-    subgraph FS["Dateien & Zustand"]
-        VIDEODIRS[("Video-Verzeichnisse<br/>IN/WORK/DONE/CORRUPT/RETRY")]
-        PROGRESS["Segment-Fortschritt<br/>[fileutils.py]"]
-        CREDS[("OAuth-Credentials")]
-        HEARTBEAT[("Heartbeat-Datei")]
-    end
+subgraph group_youtube["YouTube Integration"]
+  node_youtube_api["YouTube REST Client<br/>[youtube_api.py]"]
+  node_playlists["Playlist Management<br/>[youtube_api.py]"]
+end
 
-    EXT(("Externe<br/>Video-Zulieferung")) -->|legt Datei ab| VIDEODIRS
-    DAEMON -->|überwacht Eingang IN_CLOSE_WRITE/IN_MOVED_TO| VIDEODIRS
-    MAIN -->|verarbeitet Dateien manuell/-a| PIPE
-    DAEMON -->|startet Verarbeitung| PIPE
+subgraph group_state["Runtime State"]
+  node_config["Configuration<br/>[config.py]"]
+  node_file_state["File State<br/>[fileutils.py]"]
+  node_video_dirs[("Video Directories")]
+  node_progress_state[("Segment Progress")]
+  node_health["Healthcheck<br/>[healthcheck.py]"]
+end
 
-    PIPE -->|verschiebt IN zu WORK zu DONE/CORRUPT/RETRY| VIDEODIRS
-    PIPE -->|persistiert Segment-Fortschritt| PROGRESS
-    PIPE -->|lädt Segmente hoch| API
+subgraph group_auth["Authentication"]
+  node_get_token["OAuth CLI<br/>[get_token.py]"]
+  node_credentials[("OAuth Credentials")]
+end
 
-    MEDIA -->|ruft ffprobe/ffmpeg auf| FFMPEG["FFmpeg / FFprobe"]
+node_operator(("Operator"))
+node_video_source(("Video Source"))
+node_ffmpeg["FFmpeg/FFprobe"]
+node_google_youtube["YouTube API"]
+node_oauth_google["Google OAuth"]
 
-    OAUTH -->|führt OAuth-Flow durch| GOOGLE["Google-Dienste"]
-    OAUTH -->|schreibt Tokens| CREDS
-    API -->|liest Credentials, sendet REST-Anfragen| GOOGLE
-    API <-->|liest/aktualisiert| CREDS
+node_operator -->|"invokes"| node_main
+node_video_source -->|"provides files"| node_video_dirs
+node_main -->|"loads config"| node_config
+node_main -->|"ensures directories"| node_file_state
+node_main -->|"processes files"| node_pipeline
+node_main -->|"starts daemon"| node_daemon
+node_main -->|"runs check"| node_health
+node_daemon -->|"watches"| node_video_dirs
+node_daemon -->|"dispatches files"| node_pipeline
+node_daemon -->|"reloads config"| node_config
+node_daemon -->|"writes heartbeat"| node_health
+node_pipeline -->|"validates media"| node_media
+node_media -->|"probes and splits"| node_ffmpeg
+node_pipeline -->|"uploads segments"| node_youtube_api
+node_pipeline -->|"moves and cleans"| node_file_state
+node_pipeline -->|"loads progress"| node_progress_state
+node_file_state -->|"updates files"| node_video_dirs
+node_file_state -->|"persists progress"| node_progress_state
+node_youtube_api -->|"calls REST API"| node_google_youtube
+node_youtube_api -->|"assigns playlists"| node_playlists
+node_playlists -->|"manages playlists"| node_google_youtube
+node_operator -->|"starts OAuth"| node_get_token
+node_get_token -->|"exchanges code"| node_oauth_google
+node_get_token -->|"writes credentials"| node_credentials
+node_youtube_api -->|"reads credentials"| node_credentials
+node_config -->|"configures paths"| node_video_dirs
+node_youtube_api -.->|"refreshes tokens"| node_oauth_google
 
-    HEALTH -->|liest/schreibt| HEARTBEAT
+click node_main "https://github.com/chaos7x/yt-upload/blob/main/src/yt_upload/main.py"
+click node_daemon "https://github.com/chaos7x/yt-upload/blob/main/src/yt_upload/daemon.py"
+click node_pipeline "https://github.com/chaos7x/yt-upload/blob/main/src/yt_upload/pipeline.py"
+click node_media "https://github.com/chaos7x/yt-upload/blob/main/src/yt_upload/media.py"
+click node_youtube_api "https://github.com/chaos7x/yt-upload/blob/main/src/yt_upload/youtube_api.py"
+click node_playlists "https://github.com/chaos7x/yt-upload/blob/main/src/yt_upload/youtube_api.py"
+click node_config "https://github.com/chaos7x/yt-upload/blob/main/src/yt_upload/config.py"
+click node_file_state "https://github.com/chaos7x/yt-upload/blob/main/src/yt_upload/fileutils.py"
+click node_health "https://github.com/chaos7x/yt-upload/blob/main/src/yt_upload/healthcheck.py"
+click node_get_token "https://github.com/chaos7x/yt-upload/blob/main/src/get_token/get_token.py"
+
+classDef toneNeutral fill:#f8fafc,stroke:#334155,stroke-width:1.5px,color:#0f172a
+classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
+classDef toneAmber fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
+classDef toneMint fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
+classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337
+classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81
+classDef toneTeal fill:#ccfbf1,stroke:#0f766e,stroke-width:1.5px,color:#134e4a
+class node_main,node_daemon toneBlue
+class node_pipeline,node_media toneAmber
+class node_youtube_api,node_playlists,node_google_youtube toneMint
+class node_config,node_file_state,node_video_dirs,node_progress_state,node_health toneRose
+class node_get_token,node_credentials,node_operator,node_video_source,node_ffmpeg,node_oauth_google toneIndigo
 ```
 
 ## Komponenten
