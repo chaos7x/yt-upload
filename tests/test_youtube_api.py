@@ -80,6 +80,23 @@ class TestGetAccessToken:
         with pytest.raises(RuntimeError, match="Erneuern"):
             youtube_api.get_access_token(cred_file=str(cred_file))
 
+    def test_invalid_grant_raises_refresh_token_revoked_error(self, youtube_api, monkeypatch, tmp_path):
+        """
+        invalid_grant heisst: der Refresh-Token wurde von Google widerrufen oder ist
+        abgelaufen - das behebt sich nie durch Retrying, sondern nur durch erneutes
+        Ausführen von 'get-token'. Muss als eigene, dauerhafte Fehlerklasse erkennbar
+        sein statt als generischer RuntimeError durchzugehen.
+        """
+        cred_file = tmp_path / "creds.json"
+        _write_credentials(cred_file, {"client_id": "cid", "client_secret": "csecret", "refresh_token": "rtok"})
+        monkeypatch.setattr(
+            youtube_api.requests, "post",
+            lambda *a, **k: FakeResponse(400, json_data={"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
+        )
+
+        with pytest.raises(youtube_api.RefreshTokenRevokedError, match="get-token"):
+            youtube_api.get_access_token(cred_file=str(cred_file))
+
     def test_client_secrets_file_overrides_client_id_and_secret_but_not_refresh_token(
         self, youtube_api, monkeypatch, tmp_path
     ):
@@ -272,6 +289,52 @@ class TestAddVideoToPlaylist:
 
         assert result is False
         assert len(fake_post.calls) == 3
+
+    def test_403_forbidden_on_item_add_aborts_without_refresh_or_retry(self, youtube_api, monkeypatch):
+        """
+        403 wurde frueher wie 401 behandelt (Token-Refresh + Retry). 'forbidden' loest
+        sich dadurch nicht - muss sofort abbrechen statt Retries zu verschwenden.
+        """
+        fake_get = _make_fake_get([
+            FakeResponse(200, json_data={"items": [{"id": "pl10", "snippet": {"title": "Forbidden"}}]})
+        ])
+        monkeypatch.setattr(youtube_api.requests, "get", fake_get)
+        forbidden_body = json.dumps({"error": {"errors": [{"reason": "forbidden"}], "message": "Forbidden"}})
+        fake_post = _make_fake_post(item_responses=[FakeResponse(403, text=forbidden_body)] * 3)
+        monkeypatch.setattr(youtube_api.requests, "post", fake_post)
+
+        refresh_calls = []
+        monkeypatch.setattr(
+            youtube_api, "get_access_token",
+            lambda cred_file=None, client_secrets_file=None: refresh_calls.append(1) or "new-token"
+        )
+
+        result = youtube_api.add_video_to_playlist("vid10", "Forbidden", "tok")
+
+        assert result is False
+        assert len(fake_post.calls) == 1
+        assert refresh_calls == []
+
+    def test_403_rate_limit_reason_retries_item_add_without_token_refresh(self, youtube_api, monkeypatch):
+        fake_get = _make_fake_get([
+            FakeResponse(200, json_data={"items": [{"id": "pl11", "snippet": {"title": "RateLimited"}}]})
+        ])
+        monkeypatch.setattr(youtube_api.requests, "get", fake_get)
+        rate_limit_body = json.dumps({"error": {"errors": [{"reason": "rateLimitExceeded"}], "message": "Rate limited"}})
+        fake_post = _make_fake_post(item_responses=[FakeResponse(403, text=rate_limit_body), FakeResponse(200)])
+        monkeypatch.setattr(youtube_api.requests, "post", fake_post)
+
+        refresh_calls = []
+        monkeypatch.setattr(
+            youtube_api, "get_access_token",
+            lambda cred_file=None, client_secrets_file=None: refresh_calls.append(1) or "new-token"
+        )
+
+        result = youtube_api.add_video_to_playlist("vid11", "RateLimited", "tok")
+
+        assert result is True
+        assert len(fake_post.calls) == 2
+        assert refresh_calls == []
 
 
 class TestUploadProgressBar:

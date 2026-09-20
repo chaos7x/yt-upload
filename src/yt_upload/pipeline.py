@@ -21,7 +21,7 @@ from yt_upload.media import (
     split_video_if_needed,
 )
 from yt_upload.text_utils import censor_text, sanitize_text
-from yt_upload.youtube_api import upload_single_video
+from yt_upload.youtube_api import QuotaExceededError, upload_single_video
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +230,17 @@ def process_single_file(file_path, args=None, manage_files=True):
                 # Nur die noch nicht hochgeladenen Segmente lokal aufräumen; bereits hochgeladene
                 # Segment-Dateien können ebenfalls entfernt werden, da das Video schon bei YouTube liegt.
                 cleanup_work_files(segments, is_error=True)
+            elif isinstance(e, QuotaExceededError):
+                # Kein Problem mit der Datei selbst - ein taegliches API-/Kanal-Upload-
+                # Kontingent ist aufgebraucht und loest sich von allein wieder auf (Reset
+                # Mitternacht Pacific Time bzw. ~24h spaeter). Nach CORRUPT wuerde die Datei
+                # faelschlich als dauerhaft fehlerhaft markiert und nie automatisch erneut
+                # versucht.
+                target_retry = resolve_target_path(config.RETRY_DIR, filename)
+                logger.warning(f"Kontingent-Limit erreicht, verschiebe nach RETRY statt CORRUPT: {target_retry}")
+                shutil.move(work_path, target_retry)
+                cleanup_work_files(segments, is_error=True)
+                clear_segment_progress(work_path)
             else:
                 target_corrupt = resolve_target_path(config.CORRUPT_DIR, filename)
                 shutil.move(work_path, target_corrupt)
