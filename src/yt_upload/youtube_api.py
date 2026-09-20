@@ -84,6 +84,33 @@ class PermanentUploadError(RuntimeError):
     """Wird bei dauerhaften (nicht behebbaren) API-Fehlern ausgelöst, um sinnloses Retrying zu vermeiden."""
 
 
+# Reasons, für die Googles eigener google-api-python-client bei 403 tatsächlich
+# retryt (siehe dessen _should_retry_response()) - alles andere (quotaExceeded,
+# forbidden, insufficientPermissions, uploadLimitExceeded, forbiddenLicenseSetting,
+# forbiddenPrivacySetting, ...) ist KEIN abgelaufener Token und löst sich durch
+# Refresh+Retry nicht auf, siehe https://developers.google.com/youtube/v3/docs/errors
+_RETRYABLE_403_REASONS = {"userRateLimitExceeded", "rateLimitExceeded"}
+
+
+def _parse_api_error(response_text):
+    """
+    Extrahiert reason/message aus Googles Standard-Fehlerstruktur
+    (`{"error": {"errors": [{"reason": ..., "message": ...}], "message": ...}}`).
+    Gibt (reason, message) zurück, beides None falls das JSON nicht passt.
+    """
+    try:
+        error_obj = json.loads(response_text).get("error", {})
+    except (ValueError, AttributeError):
+        return None, None
+
+    reason = None
+    errors = error_obj.get("errors")
+    if isinstance(errors, list) and errors:
+        reason = errors[0].get("reason")
+
+    return reason, error_obj.get("message")
+
+
 class _UploadProgressBar:
     """
     Live-Fortschrittsbalken auf stderr fuer interaktive Uploads (Vorbild:
@@ -423,13 +450,29 @@ def upload_single_video(
             break
 
         # Token abgelaufen: einmalig erneuern und erneut versuchen
-        if init_res.status_code in (401, 403) and init_attempt < init_max_retries:
+        if init_res.status_code == 401 and init_attempt < init_max_retries:
             access_token = get_access_token(cred_file, client_secrets_file)
             init_headers["Authorization"] = f"Bearer {access_token}"
             continue
 
-        # Transiente Server-Fehler: mit Backoff erneut versuchen
-        if init_res.status_code in (500, 502, 503, 504) and init_attempt < init_max_retries:
+        # 403 ist nicht automatisch ein abgelaufener Token - quotaExceeded/forbidden/
+        # insufficientPermissions etc. lösen sich durch Refresh+Retry nicht und sollten
+        # nicht sinnlos wiederholt werden. Nur echte Rate-Limits rechtfertigen Retry.
+        if init_res.status_code == 403:
+            reason, message = _parse_api_error(init_res.text)
+            if reason in _RETRYABLE_403_REASONS and init_attempt < init_max_retries:
+                logger.warning(
+                    f"YouTube API meldet Rate-Limit ({reason}) bei Session-Init. "
+                    f"Retry {init_attempt}/{init_max_retries} in {2 ** init_attempt}s..."
+                )
+                time.sleep(2 ** init_attempt)
+                continue
+            raise PermanentUploadError(
+                f"Nicht behebbarer 403-Fehler bei Session-Init ({reason or 'unbekannt'}): {message or init_res.text[:500]}"
+            )
+
+        # Transiente Server-Fehler (inkl. 429 Rate-Limit): mit Backoff erneut versuchen
+        if init_res.status_code in (429, 500, 502, 503, 504) and init_attempt < init_max_retries:
             logger.warning(
                 f"YouTube API meldet {init_res.status_code} bei Session-Init. "
                 f"Retry {init_attempt}/{init_max_retries} in {2 ** init_attempt}s..."
@@ -437,7 +480,9 @@ def upload_single_video(
             time.sleep(2 ** init_attempt)
             continue
 
-        raise RuntimeError(f"Session-Init fehlgeschlagen ({init_res.status_code}): {init_res.text}")
+        reason, message = _parse_api_error(init_res.text)
+        detail = f"{reason}: {message}" if reason else init_res.text[:500]
+        raise RuntimeError(f"Session-Init fehlgeschlagen ({init_res.status_code}): {detail}")
 
     upload_url = init_res.headers.get("Location")
     if not upload_url:
@@ -513,10 +558,23 @@ def upload_single_video(
                         break
 
                     # Token abgelaufen: Access Token erneuern und erneut versuchen
-                    elif put_res.status_code in (401, 403):
+                    elif put_res.status_code == 401:
                         access_token = get_access_token(cred_file, client_secrets_file)
                         chunk_headers["Authorization"] = f"Bearer {access_token}"
                         raise RuntimeError("Token erneuert, versuche Chunk erneut...")
+
+                    # 403 ist nicht automatisch ein abgelaufener Token - quotaExceeded/
+                    # forbidden/insufficientPermissions etc. lösen sich durch Token-Refresh
+                    # nicht und sollten nicht 5x sinnlos wiederholt werden (kostet Zeit und
+                    # weiteres API-Quota, ohne die Ursache zu beheben). Nur echte Rate-Limits
+                    # (Google-SDK-Konvention) rechtfertigen Retry.
+                    elif put_res.status_code == 403:
+                        reason, message = _parse_api_error(put_res.text)
+                        if reason in _RETRYABLE_403_REASONS:
+                            raise RuntimeError(f"Rate-Limit ({reason}), versuche erneut...")
+                        raise PermanentUploadError(
+                            f"Nicht behebbarer 403-Fehler ({reason or 'unbekannt'}): {message or put_res.text[:500]}"
+                        )
 
                     # Alle übrigen Status-Codes: immer loggen, damit Fehler nicht stillschweigend verschwinden
                     else:
@@ -562,11 +620,14 @@ def upload_single_video(
                                 write_heartbeat()
                                 break
 
-                        # Dauerhafte Client-Fehler (z.B. 400 ungültige Metadaten, 404 Session weg)
-                        # lassen sich durch Wiederholen nicht beheben -> sofort abbrechen statt 5x zu retryen
+                        # Dauerhafte Client-Fehler (z.B. 400 invalidVideoMetadata/uploadLimitExceeded,
+                        # 404 Session weg) lassen sich durch Wiederholen nicht beheben -> sofort
+                        # abbrechen statt 5x zu retryen
                         if 400 <= put_res.status_code < 500 and put_res.status_code not in (401, 403, 408, 429):
+                            reason, message = _parse_api_error(put_res.text)
+                            detail = f"{reason}: {message}" if reason else put_res.text[:500]
                             raise PermanentUploadError(
-                                f"Nicht behebbarer Fehler ({put_res.status_code}): {put_res.text[:500]}"
+                                f"Nicht behebbarer Fehler ({put_res.status_code}): {detail}"
                             )
                         raise RuntimeError(f"Transienter Fehler ({put_res.status_code}), versuche erneut...")
 

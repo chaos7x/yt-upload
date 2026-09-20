@@ -3,15 +3,23 @@ Tests für die Chunk-Upload-Retry-Logik in upload_single_video().
 
 Diese Tests mocken requests.Session komplett (kein echter Netzwerk-Call) und
 get_access_token(), um gezielt jeden Zweig der Retry-Schleife durchzuspielen:
-Erfolg, Fortsetzung (308), Token-Ablauf (401/403), dauerhafte Client-Fehler
-(PermanentUploadError) und transiente Server-Fehler mit Backoff.
+Erfolg, Fortsetzung (308), Token-Ablauf (401), 403 (Rate-Limit vs. dauerhaft
+je nach `reason`), dauerhafte Client-Fehler (PermanentUploadError) und
+transiente Server-Fehler mit Backoff.
 
 thumb_path=None und playlist_name=None werden überall übergeben, damit die
 Post-Upload-Schritte (Thumbnail/Playlist) übersprungen werden und sich die
 Tests ausschließlich auf die Chunk-Übertragung konzentrieren.
 """
 
+import json
+
 import pytest
+
+
+def _error_body(reason, message="details"):
+    """Baut den JSON-Fehlertext im Standard-Google-API-Format (siehe _parse_api_error)."""
+    return json.dumps({"error": {"errors": [{"reason": reason}], "message": message}})
 
 
 class FakeResponse:
@@ -29,19 +37,24 @@ class FakeResponse:
 
 class FakeSession:
     """
-    Double für requests.Session. init-POST liefert immer dieselbe Antwort,
-    PUT-Aufrufe (Chunks) liefern der Reihe nach die in put_responses angegebenen
-    Antworten. Zeichnet zusätzlich die verwendeten Header pro PUT-Aufruf auf,
-    um z.B. den Authorization-Header nach einem Token-Refresh zu prüfen.
+    Double für requests.Session. init-POST liefert immer dieselbe Antwort (oder,
+    falls eine Liste übergeben wird, der Reihe nach jeweils die nächste - für
+    Tests der Session-Init-Retry-Schleife). PUT-Aufrufe (Chunks) liefern der
+    Reihe nach die in put_responses angegebenen Antworten. Zeichnet zusätzlich
+    die verwendeten Header pro PUT-Aufruf auf, um z.B. den Authorization-Header
+    nach einem Token-Refresh zu prüfen.
     """
 
     def __init__(self, init_response, put_responses):
-        self._init_response = init_response
+        self._init_responses = init_response if isinstance(init_response, list) else None
+        self._init_response = None if self._init_responses else init_response
         self._put_responses = list(put_responses)
         self.put_calls = 0
         self.put_headers_seen = []
 
     def post(self, url, headers=None, json=None, timeout=None):
+        if self._init_responses:
+            return self._init_responses.pop(0)
         return self._init_response
 
     def put(self, url, headers=None, data=None, timeout=None):
@@ -196,6 +209,91 @@ class TestChunkUploadTokenRefresh:
         assert auth_headers[0] == "Bearer token-A"
         assert auth_headers[1] == "Bearer token-B"
         assert auth_headers[0] != auth_headers[1]
+
+
+class TestSessionInit403Handling:
+    """Dieselbe reason-basierte 403-Unterscheidung gilt auch für die Session-Init-Retry-Schleife."""
+
+    def test_rate_limit_reason_retries_session_init_and_succeeds(self, youtube_api, monkeypatch, video_file):
+        init_403 = FakeResponse(403, text=_error_body("rateLimitExceeded"))
+        init_ok = FakeResponse(200, headers={"Location": "https://fake/session-init-rate"})
+        put_ok = FakeResponse(200, json_data={"id": "vid_init_after_rate_limit"})
+        fake_session = FakeSession([init_403, init_ok], [put_ok])
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        result = youtube_api.upload_single_video(
+            file_path=video_file, title="Test", desc="", category=None, tags=None,
+            rec_date=None, thumb_path=None, playlist_name=None
+        )
+
+        assert result == "vid_init_after_rate_limit"
+
+    def test_quota_exceeded_aborts_session_init_immediately(self, youtube_api, monkeypatch, video_file):
+        init_403 = FakeResponse(403, text=_error_body("quotaExceeded", "Daily quota exceeded"))
+        fake_session = FakeSession([init_403] * 3, [])
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        with pytest.raises(youtube_api.PermanentUploadError, match="quotaExceeded"):
+            youtube_api.upload_single_video(
+                file_path=video_file, title="Test", desc="", category=None, tags=None,
+                rec_date=None, thumb_path=None, playlist_name=None
+            )
+
+
+class TestChunkUpload403Handling:
+    """
+    403 wurde frueher wie 401 behandelt (Token-Refresh + Retry) - das hilft aber
+    nicht bei quotaExceeded/forbidden/insufficientPermissions etc., die sich
+    durch einen neuen Token nicht loesen. Nur die beiden von Googles eigenem
+    google-api-python-client als retry-wuerdig eingestuften reasons
+    (userRateLimitExceeded/rateLimitExceeded) sollen erneut versucht werden,
+    alles andere muss sofort als PermanentUploadError durchschlagen.
+    """
+
+    def test_rate_limit_reason_retries_and_succeeds(self, youtube_api, monkeypatch, video_file):
+        init_response = FakeResponse(200, headers={"Location": "https://fake/session-403-rate"})
+        put_403 = FakeResponse(403, text=_error_body("userRateLimitExceeded"))
+        put_ok = FakeResponse(200, json_data={"id": "vid_after_rate_limit"})
+        fake_session = FakeSession(init_response, [put_403, put_ok])
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        result = youtube_api.upload_single_video(
+            file_path=video_file, title="Test", desc="", category=None, tags=None,
+            rec_date=None, thumb_path=None, playlist_name=None
+        )
+
+        assert result == "vid_after_rate_limit"
+        assert fake_session.put_calls == 2
+
+    def test_quota_exceeded_aborts_immediately_without_retry(self, youtube_api, monkeypatch, video_file):
+        init_response = FakeResponse(200, headers={"Location": "https://fake/session-403-quota"})
+        put_403 = FakeResponse(403, text=_error_body("quotaExceeded", "Daily quota exceeded"))
+        fake_session = FakeSession(init_response, [put_403] * 5)
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        with pytest.raises(youtube_api.PermanentUploadError, match="quotaExceeded"):
+            youtube_api.upload_single_video(
+                file_path=video_file, title="Test", desc="", category=None, tags=None,
+                rec_date=None, thumb_path=None, playlist_name=None
+            )
+
+        # Kernpunkt des Fixes: quotaExceeded loest sich nicht durch Token-Refresh,
+        # also darf hier NICHT 5x sinnlos retried werden.
+        assert fake_session.put_calls == 1
+
+    def test_unparseable_403_body_still_aborts_as_permanent(self, youtube_api, monkeypatch, video_file):
+        init_response = FakeResponse(200, headers={"Location": "https://fake/session-403-broken"})
+        put_403 = FakeResponse(403, text="not json")
+        fake_session = FakeSession(init_response, [put_403] * 5)
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        with pytest.raises(youtube_api.PermanentUploadError):
+            youtube_api.upload_single_video(
+                file_path=video_file, title="Test", desc="", category=None, tags=None,
+                rec_date=None, thumb_path=None, playlist_name=None
+            )
+
+        assert fake_session.put_calls == 1
 
 
 class TestChunkUploadErrorHandling:
