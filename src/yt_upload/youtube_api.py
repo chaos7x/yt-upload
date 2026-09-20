@@ -75,6 +75,21 @@ def get_access_token(cred_file=None, client_secrets_file=None):
 
     res = requests.post(token_url, data=payload, timeout=30)
     if res.status_code != 200:
+        try:
+            oauth_error = res.json().get("error")
+        except (ValueError, AttributeError):
+            oauth_error = None
+
+        # invalid_grant heisst: der Refresh-Token wurde von Google widerrufen oder ist
+        # abgelaufen (z.B. nach 6 Monaten Inaktivitaet, oder weil die OAuth-App noch im
+        # Testing-Modus ist und die 7-Tage-Grenze ueberschritten wurde) - das behebt sich
+        # NIE von selbst durch Retrying, sondern erfordert einen manuellen "get-token"-Lauf.
+        if oauth_error == "invalid_grant":
+            raise RefreshTokenRevokedError(
+                f"Refresh-Token in {target_cred} wurde von Google widerrufen oder ist abgelaufen "
+                f"(invalid_grant) - 'get-token' erneut ausführen, um die Datei neu zu erzeugen."
+            )
+
         raise RuntimeError(f"Fehler beim Erneuern des Access Tokens: {res.text}")
 
     return res.json().get("access_token")
@@ -82,6 +97,31 @@ def get_access_token(cred_file=None, client_secrets_file=None):
 
 class PermanentUploadError(RuntimeError):
     """Wird bei dauerhaften (nicht behebbaren) API-Fehlern ausgelöst, um sinnloses Retrying zu vermeiden."""
+
+
+class RefreshTokenRevokedError(PermanentUploadError):
+    """
+    Der Refresh-Token ist dauerhaft ungültig (Google invalid_grant) - erbt bewusst von
+    PermanentUploadError, damit die Chunk-Upload-Retry-Schleife (die PermanentUploadError
+    explizit unretried durchreicht) hier nicht 5x sinnlos einen neuen Token anfragt, der
+    garantiert wieder denselben Fehler liefert.
+    """
+
+
+class QuotaExceededError(PermanentUploadError):
+    """
+    Ein externes Zeit-/Kontingent-Limit (tägliches API-Kontingent oder Kanal-Upload-Limit)
+    wurde erreicht - KEIN Problem mit der Videodatei selbst, löst sich von allein wieder
+    auf (API-Kontingent-Reset Mitternacht Pacific Time bzw. Upload-Limit ~24h später).
+    Eigene Klasse, damit pipeline.py eine deswegen fehlgeschlagene Datei nach RETRY_DIR
+    statt CORRUPT_DIR verschieben kann.
+    """
+
+
+# reason-Werte, die ein Kontingent-/Limit-Problem statt eines Content-Problems anzeigen,
+# siehe https://developers.google.com/youtube/v3/docs/errors (videos.insert)
+_QUOTA_403_REASONS = {"quotaExceeded"}
+_QUOTA_400_REASONS = {"uploadLimitExceeded", "dailyLimitExceeded"}
 
 
 # Reasons, für die Googles eigener google-api-python-client bei 403 tatsächlich
@@ -191,7 +231,8 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
     """
     Sucht eine Playlist anhand ihres Namens. Erstellt diese, falls nicht vorhanden,
     und fügt das hochgeladene Video hinzu (inkl. Retry-Logik bei temporären API-Fehlern).
-    Erneuert den Access-Token automatisch bei 401/403 (z.B. nach sehr langen Uploads).
+    Erneuert den Access-Token automatisch bei 401 (z.B. nach sehr langen Uploads); 403 wird
+    separat nach `reason` behandelt (siehe upload_single_video()).
     """
     if not playlist_name or not video_id:
         return False
@@ -204,7 +245,10 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
             new_token = get_access_token(cred_file, client_secrets_file)
             headers["Authorization"] = f"Bearer {new_token}"
             return True
-        except (OSError, ValueError, KeyError, requests.exceptions.RequestException) as e:
+        # RuntimeError deckt hier auch RefreshTokenRevokedError/PermanentUploadError ab - ein
+        # widerrufener Refresh-Token darf die bereits erfolgreiche Video-Upload-Rückgabe nicht
+        # zum Absturz bringen, Playlist-Zuweisung ist rein optional (siehe Docstring oben).
+        except (OSError, ValueError, KeyError, RuntimeError, requests.exceptions.RequestException) as e:
             logger.warning(f"Token-Refresh für Playlist-Zuweisung fehlgeschlagen: {e}")
             return False
 
@@ -221,7 +265,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
 
             res = requests.get(list_url, headers=headers, timeout=30)
 
-            if res.status_code in (401, 403) and not auth_retry_used:
+            if res.status_code == 401 and not auth_retry_used:
                 logger.warning("Playlist-Abruf: Token abgelaufen, erneuere und versuche erneut...")
                 auth_retry_used = True
                 if _refresh_token_if_possible():
@@ -241,7 +285,11 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
                 if not next_page:
                     break
             else:
-                logger.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {res.text}")
+                # 403 hier ist kein automatischer Token-Ablauf mehr (siehe Upload-Pfad) -
+                # reason mitloggen statt blind mit neuem Token zu retryen.
+                reason, message = _parse_api_error(res.text)
+                detail = f"{reason}: {message}" if reason else res.text
+                logger.warning(f"Konnte Playlists nicht abrufen ({res.status_code}): {detail}")
                 break
 
         # Falls Playlist nicht existiert, erstelle sie neu
@@ -252,7 +300,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
                 "status": {"privacyStatus": privacy}
             }
             create_res = requests.post(create_url, headers=headers, json=create_body, timeout=30)
-            if create_res.status_code in (401, 403) and not auth_retry_used:
+            if create_res.status_code == 401 and not auth_retry_used:
                 logger.warning("Playlist-Erstellung: Token abgelaufen, erneuere und versuche erneut...")
                 auth_retry_used = True
                 if _refresh_token_if_possible():
@@ -260,7 +308,9 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
             if create_res.status_code in (200, 201):
                 playlist_id = create_res.json().get("id")
             elif create_res.status_code not in (200, 201):
-                logger.warning(f"Konnte Playlist nicht erstellen ({create_res.status_code}): {create_res.text}")
+                reason, message = _parse_api_error(create_res.text)
+                detail = f"{reason}: {message}" if reason else create_res.text
+                logger.warning(f"Konnte Playlist nicht erstellen ({create_res.status_code}): {detail}")
 
         # Video der Playlist zuweisen
         if playlist_id:
@@ -278,7 +328,7 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
             for attempt in range(1, max_retries + 1):
                 item_res = requests.post(item_url, headers=headers, json=item_body, timeout=30)
 
-                if item_res.status_code in (401, 403) and not auth_retry_used:
+                if item_res.status_code == 401 and not auth_retry_used:
                     logger.warning("Playlist-Zuweisung: Token abgelaufen, erneuere und versuche erneut...")
                     auth_retry_used = True
                     if _refresh_token_if_possible():
@@ -288,7 +338,15 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
                     logger.info(f"Video {video_id} erfolgreich zur Playlist '{playlist_name}' hinzugefügt.")
                     return True
 
-                if item_res.status_code in (409, 500, 502, 503, 504) and attempt < max_retries:
+                # 403 ist kein automatischer Token-Ablauf mehr - nur echte Rate-Limits
+                # (Google-SDK-Konvention) rechtfertigen Retry, alles andere (quotaExceeded,
+                # forbidden, ...) sofort als endgültig behandeln.
+                retryable_403 = False
+                if item_res.status_code == 403:
+                    reason_403, _ = _parse_api_error(item_res.text)
+                    retryable_403 = reason_403 in _RETRYABLE_403_REASONS
+
+                if (item_res.status_code in (409, 429, 500, 502, 503, 504) or retryable_403) and attempt < max_retries:
                     logger.warning(
                         f"YouTube API meldet {item_res.status_code} beim Playlist-Assignment. "
                         f"Retry {attempt}/{max_retries} in {retry_delay}s..."
@@ -296,10 +354,14 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
                     time.sleep(retry_delay)
                     retry_delay *= 2
                 else:
-                    logger.warning(f"Video konnte Playlist nicht hinzugefügt werden: {item_res.text}")
+                    reason, message = _parse_api_error(item_res.text)
+                    detail = f"{reason}: {message}" if reason else item_res.text
+                    logger.warning(f"Video konnte Playlist nicht hinzugefügt werden: {detail}")
                     break
 
-    except (requests.exceptions.RequestException, ValueError, KeyError, OSError) as e:
+    # RuntimeError deckt hier auch RefreshTokenRevokedError/PermanentUploadError ab, falls
+    # _refresh_token_if_possible() darüber hinaus doch mal durchschlagen sollte.
+    except (requests.exceptions.RequestException, ValueError, KeyError, RuntimeError, OSError) as e:
         logger.error(f"Fehler bei Playlist-API: {e}")
     return False
 
@@ -467,7 +529,8 @@ def upload_single_video(
                 )
                 time.sleep(2 ** init_attempt)
                 continue
-            raise PermanentUploadError(
+            error_cls = QuotaExceededError if reason in _QUOTA_403_REASONS else PermanentUploadError
+            raise error_cls(
                 f"Nicht behebbarer 403-Fehler bei Session-Init ({reason or 'unbekannt'}): {message or init_res.text[:500]}"
             )
 
@@ -572,7 +635,8 @@ def upload_single_video(
                         reason, message = _parse_api_error(put_res.text)
                         if reason in _RETRYABLE_403_REASONS:
                             raise RuntimeError(f"Rate-Limit ({reason}), versuche erneut...")
-                        raise PermanentUploadError(
+                        error_cls = QuotaExceededError if reason in _QUOTA_403_REASONS else PermanentUploadError
+                        raise error_cls(
                             f"Nicht behebbarer 403-Fehler ({reason or 'unbekannt'}): {message or put_res.text[:500]}"
                         )
 
@@ -626,7 +690,8 @@ def upload_single_video(
                         if 400 <= put_res.status_code < 500 and put_res.status_code not in (401, 403, 408, 429):
                             reason, message = _parse_api_error(put_res.text)
                             detail = f"{reason}: {message}" if reason else put_res.text[:500]
-                            raise PermanentUploadError(
+                            error_cls = QuotaExceededError if reason in _QUOTA_400_REASONS else PermanentUploadError
+                            raise error_cls(
                                 f"Nicht behebbarer Fehler ({put_res.status_code}): {detail}"
                             )
                         raise RuntimeError(f"Transienter Fehler ({put_res.status_code}), versuche erneut...")
@@ -646,7 +711,11 @@ def upload_single_video(
     # (~1h) überschreiten. Token hier proaktiv erneuern statt erst bei 401 zu reagieren.
     try:
         access_token = get_access_token(cred_file, client_secrets_file)
-    except (OSError, ValueError, KeyError, requests.exceptions.RequestException) as refresh_err:
+    # RuntimeError deckt hier auch RefreshTokenRevokedError/PermanentUploadError ab - der
+    # Video-Upload ist bereits abgeschlossen (video_id existiert), ein widerrufener Token
+    # darf die Rückgabe des erfolgreichen Uploads nicht verhindern, Thumbnail/Playlist
+    # sind rein optionale Post-Upload-Schritte.
+    except (OSError, ValueError, KeyError, RuntimeError, requests.exceptions.RequestException) as refresh_err:
         logger.warning(f"Token-Refresh vor Post-Upload-Schritten fehlgeschlagen, verwende bestehenden Token: {refresh_err}")
 
     try:
@@ -671,14 +740,21 @@ def upload_single_video(
                         if t_res.status_code in (200, 201):
                             logger.info("Thumbnail erfolgreich gesetzt.")
                             break
-                        elif t_res.status_code in (401, 403) and thumb_attempt == 1:
+                        elif t_res.status_code == 401 and thumb_attempt == 1:
                             logger.warning("Thumbnail-Upload: Token abgelaufen, erneuere und versuche erneut...")
                             access_token = get_access_token(cred_file, client_secrets_file)
                             continue
                         else:
-                            logger.warning(f"Thumbnail-Upload fehlgeschlagen ({t_res.status_code}): {t_res.text}")
+                            # 403 ist kein automatischer Token-Ablauf mehr (z.B. "forbidden",
+                            # wenn der Kanal nicht fuer Custom-Thumbnails freigeschaltet ist) -
+                            # reason mitloggen statt blind mit neuem Token zu retryen.
+                            reason, message = _parse_api_error(t_res.text)
+                            detail = f"{reason}: {message}" if reason else t_res.text
+                            logger.warning(f"Thumbnail-Upload fehlgeschlagen ({t_res.status_code}): {detail}")
                             break
-                except (OSError, ValueError, KeyError, requests.exceptions.RequestException) as te:
+                # RuntimeError deckt hier auch RefreshTokenRevokedError/PermanentUploadError ab -
+                # Thumbnail ist optional, darf den bereits erfolgreichen Upload nicht kippen.
+                except (OSError, ValueError, KeyError, RuntimeError, requests.exceptions.RequestException) as te:
                     logger.warning(f"Fehler beim Thumbnail-Setzen: {te}")
 
             if playlist_name:
