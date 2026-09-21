@@ -38,11 +38,14 @@ RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RemoveIPC=true
-# Nur TCP/IP wird tatsaechlich gebraucht (YouTube/Google-API via requests) -
-# inotify nutzt reine Syscalls (kein Socket), Logging nur Datei/stdout (kein
-# Syslog-Socket). Bei eigenen Erweiterungen, die z.B. einen Unix-Socket
-# brauchen, diese Zeile entsprechend erweitern oder entfernen.
-RestrictAddressFamilies=AF_INET AF_INET6
+# TCP/IP fuer die YouTube/Google-API via requests, plus AF_UNIX: Hostname-
+# Aufloesung kann je nach Distro-Konfiguration ueber die klassische
+# nss-dns-Direktabfrage (reines AF_INET/AF_INET6) ODER ueber nss-resolve
+# laufen, das per lokalem Unix-Socket mit systemd-resolved spricht - ohne
+# AF_UNIX waere DNS-Aufloesung auf Hosts mit aktivem systemd-resolved
+# stillschweigend kaputt. inotify nutzt reine Syscalls (kein Socket),
+# Logging nur Datei/stdout (kein Syslog-Socket).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
 WantedBy=multi-user.target
