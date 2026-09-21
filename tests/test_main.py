@@ -29,6 +29,16 @@ class TestParseBool:
             main_module._parse_bool("maybe")
 
 
+class TestParseArgumentsRequeueRetries:
+    def test_default_is_false(self, main_module):
+        args = main_module.parse_arguments(["video.mp4"])
+        assert args.requeue_retries is False
+
+    def test_flag_sets_true(self, main_module):
+        args = main_module.parse_arguments(["--requeue-retries"])
+        assert args.requeue_retries is True
+
+
 class TestParseArgumentsEmbeddable:
     def test_default_is_none(self, main_module):
         args = main_module.parse_arguments(["video.mp4"])

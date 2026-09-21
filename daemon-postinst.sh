@@ -39,5 +39,10 @@ echo "'get-token' ausfuehren, dann den Dienst manuell aktivieren und starten:"
 echo ""
 echo "    systemctl enable --now yt-upload"
 echo ""
+echo "Optional: liegen gebliebene Dateien in RETRY_DIR (z.B. nach einem"
+echo "quotaExceeded) taeglich automatisch zurueck nach IN_DIR verschieben:"
+echo ""
+echo "    systemctl enable --now yt-upload-retry.timer"
+echo ""
 
 exit 0

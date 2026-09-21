@@ -1,0 +1,37 @@
+[Unit]
+Description=yt-upload - Requeue liegen gebliebener Dateien aus RETRY_DIR
+Documentation=https://github.com/chaos7x/yt-upload
+
+[Service]
+Type=oneshot
+User=yt-upload
+Group=yt-upload
+SupplementaryGroups=media-pipeline
+ExecStart=/usr/bin/yt-upload --requeue-retries
+
+# --- Hardening ---
+# Kein eigener Cooldown im Code - siehe fileutils.requeue_retries() und
+# yt-upload-retry.timer: das Timer-Intervall selbst ist die einzige
+# Stellschraube fuer die Retry-Kadenz.
+#
+# Strenger als yt-upload.service: dieser Dienst verschiebt nur Dateien
+# zwischen RETRY_DIR und IN_DIR und macht dabei nachweislich keine
+# Netzwerk-Anfragen (kein YouTube-API-Zugriff, kein Token-Handling) -
+# RestrictAddressFamilies=none blockiert deshalb saemtliche Adressfamilien.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/media-pipeline /var/log/yt-upload
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+RestrictAddressFamilies=none

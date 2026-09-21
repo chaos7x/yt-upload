@@ -7,7 +7,7 @@ import sys
 
 from yt_upload import __title__, __version__, config
 from yt_upload.daemon import acquire_instance_lock, find_existing_video, run_daemon
-from yt_upload.fileutils import ensure_directories
+from yt_upload.fileutils import ensure_directories, requeue_retries
 from yt_upload.healthcheck import run_healthcheck
 from yt_upload.logging_setup import setup_logging
 from yt_upload.pipeline import process_single_file
@@ -45,6 +45,7 @@ def parse_arguments(argv=None):
     parser.add_argument("-a", "--auto", action="store_true", help="Automatischer Batch-Modus für ein Verzeichnis")
     parser.add_argument("-D", "--daemon", action="store_true", help="Dämon-Modus: Dauerhafte inotify-Verzeichnisüberwachung (benötigt zusätzlich das Paket yt-upload-daemon)")
     parser.add_argument("--healthcheck", action="store_true", help="Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort (für Docker HEALTHCHECK)")
+    parser.add_argument("--requeue-retries", action="store_true", help="Verschiebt alle Dateien aus RETRY_DIR zurück nach IN_DIR und beendet sich sofort (für einen periodischen systemd-Timer, siehe yt-upload-retry.timer)")
 
     parser.add_argument("-t", "--title", help="Video-Titel (Standard: Metadaten/Dateiname)")
     parser.add_argument(
@@ -128,17 +129,28 @@ def main():
     # Logdatei) nicht anlegbar sind (z.B. Bare-Metal-Installation ohne
     # gesetztes upload.conf, Aufruf aus einem schreibgeschützten
     # Verzeichnis), unnötige Permission-Warnungen erzeugen.
-    if not (args.files or args.auto or args.daemon):
+    if not (args.files or args.auto or args.daemon or args.requeue_retries):
         print(f"{__title__} v{__version__}\n")
         print("Bitte einen Betriebsmodus wählen:")
         print("  - Einzelne Datei:  yt-upload /pfad/zum/video.mp4")
         print("  - Mehrere Dateien: yt-upload video1.mp4 video2.mp4 ...")
         print("  - Auto-Pipeline:   yt-upload -a")
         print("  - Dämon-Modus:     yt-upload -D (benötigt zusätzlich das Paket yt-upload-daemon)")
+        print("  - Retry-Requeue:   yt-upload --requeue-retries (für einen periodischen systemd-Timer)")
         print("\nNutze -h oder --help für alle Optionen.")
         return
 
     config.load_configuration(log_changes=False)
+
+    # --requeue-retries ist ein eigener, kurzlebiger Modus (wie --healthcheck)
+    # ohne Instanz-Lock/Datei-Upload-Logik: er verschiebt nur Dateien zwischen
+    # zwei bereits von Auto-Batch/Dämon verwalteten Verzeichnissen und beendet
+    # sich danach sofort - typischerweise von einem systemd-Timer aufgerufen.
+    if args.requeue_retries:
+        setup_logging()
+        moved = requeue_retries()
+        logger.info(f"Requeue abgeschlossen: {moved} Datei(en) von RETRY_DIR zurück nach IN_DIR verschoben.")
+        return
 
     # Nur Auto-Batch (-a) und Dämon (-D) verwalten Dateien über die festen
     # IN_DIR/WORK_DIR/DONE_DIR/CORRUPT_DIR/RETRY_DIR-Verzeichnisse. Der

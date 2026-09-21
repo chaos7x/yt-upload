@@ -1,0 +1,15 @@
+[Unit]
+Description=Periodischer Requeue liegen gebliebener Dateien aus RETRY_DIR (yt-upload)
+Documentation=https://github.com/chaos7x/yt-upload
+
+[Timer]
+# Faellt zeitlich mit Googles taeglichem API-Kontingent-Reset zusammen, ist
+# aber nur ein sinnvoller Default - trivial per `systemctl edit
+# yt-upload-retry.timer`-Override anpassbar (z.B. OnUnitActiveSec=6h fuer
+# haeufigere Versuche). Kein Cooldown im Code (siehe yt-upload-retry.service):
+# dieses Intervall ist die einzige Stellschraube fuer die Retry-Kadenz.
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

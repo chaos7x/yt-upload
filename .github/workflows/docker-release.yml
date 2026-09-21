@@ -182,6 +182,8 @@ jobs:
 
           mkdir -p pkgroot-daemon/usr/lib/systemd/system
           cp yt-upload.service pkgroot-daemon/usr/lib/systemd/system/yt-upload.service
+          cp yt-upload-retry.service pkgroot-daemon/usr/lib/systemd/system/yt-upload-retry.service
+          cp yt-upload-retry.timer pkgroot-daemon/usr/lib/systemd/system/yt-upload-retry.timer
 
       - name: yt-upload (CLI) .deb bauen
         run: |
