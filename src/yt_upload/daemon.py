@@ -5,6 +5,7 @@ Instanz-Lock und periodische Housekeeping-Aufgaben.
 
 import logging
 import os
+import signal
 import tempfile
 import time
 
@@ -108,7 +109,11 @@ def wait_for_input(target_dir=None, inotify_adapter=None):
         if not HAS_INOTIFY:
             logger.warning("inotify-Modul nicht verfügbar, nutze Polling-Fallback.")
         while True:
+            if shutdown_requested():
+                return None
             time.sleep(10)
+            if shutdown_requested():
+                return None
             config.load_configuration(log_changes=True)
             write_heartbeat()
             existing = find_existing_video(target_dir)
@@ -125,6 +130,9 @@ def wait_for_input(target_dir=None, inotify_adapter=None):
             # Zweig unten nie erreicht - totes Coder, das effektiv jede
             # periodische Prüfung während des Wartens verhinderte.
             for event in inotify_adapter.event_gen(yield_nones=True, timeout_s=10):
+                if shutdown_requested():
+                    return None
+
                 run_periodic_tasks()
 
                 if event is None:
@@ -150,10 +158,41 @@ def wait_for_input(target_dir=None, inotify_adapter=None):
                         return full_path
         except Exception as e:  # noqa: BLE001 - Sicherheitsnetz für den gesamten Inotify-Loop; die inotify-Bibliothek kann diverse, nicht klar typisierte Fehler werfen
             logger.error(f"Fehler beim Inotify-Observer: {e}")
+            if shutdown_requested():
+                return None
             time.sleep(5)
             existing = find_existing_video(target_dir)
             if existing:
                 return existing
+
+
+_shutdown_requested = False
+
+
+def _handle_shutdown_signal(signum, _frame):
+    global _shutdown_requested
+    logger.info(f"Signal {signal.Signals(signum).name} empfangen, beende nach der aktuellen Datei...")
+    _shutdown_requested = True
+
+
+def install_signal_handlers():
+    """
+    Registriert SIGTERM/SIGINT für einen sauberen Shutdown. `systemctl stop`
+    (und `docker stop`) senden SIGTERM, das Python OHNE eigenen Handler nicht in
+    ein KeyboardInterrupt übersetzt - der Prozess würde sofort beendet, ohne der
+    aktuell laufenden Datei die Chance zu geben, einen Chunk sauber abzuschließen.
+    Registriert denselben Handler auch für SIGINT (Ctrl+C), damit sich beide
+    Signale identisch verhalten. Nur aus dem Hauptthread aufrufbar (siehe
+    signal.signal()-Doku) - run_daemon() wird ausschließlich von main() so
+    aufgerufen, daher hier kein Try/Except-Fallback nötig wie bei HAS_FCNTL/
+    HAS_INOTIFY oben.
+    """
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
+
+
+def shutdown_requested():
+    return _shutdown_requested
 
 
 _lock_file_handle = None
@@ -193,15 +232,18 @@ def acquire_instance_lock():
 def run_daemon():
     """
     Dauerhafte Überwachung des Eingangsverzeichnisses mittels Inotify (mit
-    Polling-Fallback). Läuft bis KeyboardInterrupt (Ctrl+C / SIGINT).
+    Polling-Fallback). Läuft bis SIGTERM/SIGINT (siehe install_signal_handlers()):
+    eine bereits erkannte Datei wird noch fertig verarbeitet, es wird aber keine
+    neue Datei mehr aus IN_DIR entgegengenommen.
     """
     logger.info("Starte Dämon-Modus...")
+    install_signal_handlers()
 
     current_watched_dir = None
     inotify_adapter = None
 
     try:
-        while True:
+        while not shutdown_requested():
             config.load_configuration(log_changes=True)
             write_heartbeat()
 
@@ -219,4 +261,8 @@ def run_daemon():
             if input_file:
                 process_single_file(input_file, args=None)
     except KeyboardInterrupt:
-        logger.info("Dämon-Modus beendet.")
+        # Fallback, falls SIGINT ausnahmsweise doch als Exception ankommt (z.B. wenn
+        # install_signal_handlers() den Handler aus irgendeinem Grund nicht setzen konnte).
+        logger.info("Dämon-Modus beendet (KeyboardInterrupt).")
+    else:
+        logger.info("Dämon-Modus beendet (Signal empfangen).")

@@ -202,6 +202,8 @@ systemctl enable --now yt-upload
 
 `CREDENTIALS_FILE` ist per Env-Var überschreibbar (`config.py`) - das lässt sich mit `LoadCredentialEncrypted=` (systemd >= 250) kombinieren, um die OAuth-Credentials-Datei nicht mehr dauerhaft als Klartext auf der Platte liegen zu haben. Anders als eine App-seitige Verschlüsselung mit Schlüssel direkt daneben ist das ein echter Gewinn: der `yt-upload`-Systemuser selbst braucht dafür nie Lesezugriff auf den Master-Key - nur `systemd` (PID 1, root) entschlüsselt beim Service-Start und reicht dem Prozess ausschließlich eine Kopie in einem privaten, nur für ihn lesbaren tmpfs-Verzeichnis durch.
 
+**Pfad beachten:** Ohne explizite `credentials_file`-Konfiguration gibt es bare-metal keinen einheitlichen Standardpfad - `get-token` schreibt ohne `/app/oauth` (Docker-Konvention) standardmäßig relativ ins aktuelle Arbeitsverzeichnis, während der `yt-upload`-Dienst selbst auf sein Installationsverzeichnis zurückfällt. Für den Dämon-Betrieb daher **zuerst** `credentials_file = /etc/yt-upload/youtube-upload-credentials.json` in `/etc/yt-upload/upload.conf` eintragen (oder einen anderen festen Pfad wählen) und `get-token` mit passend gesetzter `CREDENTIALS_FILE`-Umgebungsvariable ausführen, damit beide auf dieselbe Datei zeigen - erst danach ergibt das Verschlüsseln unten Sinn:
+
 Am saubersten über ein Override-Snippet statt direkt in der von `.deb`/systemd verwalteten Unit-Datei (bleibt so update-sicher):
 
 ```bash
@@ -235,7 +237,7 @@ systemctl restart yt-upload
 shred -u /etc/yt-upload/youtube-upload-credentials.json
 ```
 
-`get-token` selbst bleibt davon unberührt - es muss weiterhin einmalig interaktiv laufen und die Klartext-Datei erst erzeugen, bevor sie in Schritt 1 verschlüsselt wird.
+`get-token` selbst bleibt davon unberührt - es muss weiterhin einmalig interaktiv laufen (mit der oben genannten `CREDENTIALS_FILE`-Umgebungsvariable) und die Klartext-Datei erst erzeugen, bevor sie in Schritt 1 verschlüsselt wird.
 
 ---
 
