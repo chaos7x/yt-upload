@@ -198,6 +198,45 @@ systemctl enable --now yt-upload
 ./get-token.pyz
 ```
 
+### 🔒 Optional: Credentials mit systemd-creds verschlüsseln (nur Dämon/.deb-Paket)
+
+`CREDENTIALS_FILE` ist per Env-Var überschreibbar (`config.py`) - das lässt sich mit `LoadCredentialEncrypted=` (systemd >= 250) kombinieren, um die OAuth-Credentials-Datei nicht mehr dauerhaft als Klartext auf der Platte liegen zu haben. Anders als eine App-seitige Verschlüsselung mit Schlüssel direkt daneben ist das ein echter Gewinn: der `yt-upload`-Systemuser selbst braucht dafür nie Lesezugriff auf den Master-Key - nur `systemd` (PID 1, root) entschlüsselt beim Service-Start und reicht dem Prozess ausschließlich eine Kopie in einem privaten, nur für ihn lesbaren tmpfs-Verzeichnis durch.
+
+Am saubersten über ein Override-Snippet statt direkt in der von `.deb`/systemd verwalteten Unit-Datei (bleibt so update-sicher):
+
+```bash
+# 1. Vorhandene Klartext-Datei verschlüsseln (einmalig, als root; --with-key=tpm2 bindet
+#    die .cred-Datei zusätzlich an dieses eine Gerät, sonst wird automatisch ein
+#    maschinen-eigener Schlüssel unter /var/lib/systemd/credential.secret verwendet)
+systemd-creds encrypt \
+  --name=youtube-credentials \
+  /etc/yt-upload/youtube-upload-credentials.json \
+  /etc/yt-upload/youtube-upload-credentials.json.cred
+
+# 2. Override-Datei anlegen statt die Unit direkt zu editieren
+systemctl edit yt-upload
+```
+
+Im Editor, der sich dabei öffnet, folgendes Override-Snippet einfügen:
+
+```ini
+[Service]
+LoadCredentialEncrypted=youtube-credentials:/etc/yt-upload/youtube-upload-credentials.json.cred
+Environment=CREDENTIALS_FILE=%d/youtube-credentials
+```
+
+(`%d` ist der systemd-Specifier für `$CREDENTIALS_DIRECTORY`, das private tmpfs mit der entschlüsselten Kopie.)
+
+```bash
+# 3. Erst NACH erfolgreichem Test (systemctl restart yt-upload, Logs prüfen) das
+#    Original entfernen - shred statt rm, damit nichts unverschlüsselt auf der SSD/im
+#    Dateisystem-Journal hängen bleibt
+systemctl restart yt-upload
+shred -u /etc/yt-upload/youtube-upload-credentials.json
+```
+
+`get-token` selbst bleibt davon unberührt - es muss weiterhin einmalig interaktiv laufen und die Klartext-Datei erst erzeugen, bevor sie in Schritt 1 verschlüsselt wird.
+
 ---
 
 ## 🐳 Docker-Image-Varianten
