@@ -142,6 +142,66 @@ volumes:
       device: "./log"
 ```
 
+### Optional: Automatischer Retry liegen gebliebener Dateien (Docker)
+
+Die systemd-Timer-/Cron-Lösung aus dem Bare-Metal-Abschnitt (siehe unten) greift in Docker nicht - der Container läuft als Single-Process ohne eigenen Cron/systemd. `--requeue-retries` selbst funktioniert aber unverändert, da es keinen Instanz-Lock braucht und daher problemlos neben dem bereits laufenden `-D`-Prozess im selben Container ausgeführt werden kann - die Terminierung übernimmt stattdessen der **Docker-Host** per `docker exec` in den laufenden Container hinein:
+
+```bash
+# Host-Crontab (crontab -e auf dem Docker-Host)
+0 3 * * * docker exec yt-upload yt-upload --requeue-retries
+```
+
+Nutzt der Host selbst systemd, geht das genauso als Timer (analog zu `yt-upload-retry.timer`, nur mit `docker exec` statt direktem Aufruf):
+
+```ini
+# /etc/systemd/system/yt-upload-retry-docker.service
+[Unit]
+Description=yt-upload (Docker) - Requeue liegen gebliebener Dateien aus RETRY_DIR
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec yt-upload yt-upload --requeue-retries
+```
+
+```ini
+# /etc/systemd/system/yt-upload-retry-docker.timer
+[Unit]
+Description=Periodischer Requeue liegen gebliebener Dateien aus RETRY_DIR (yt-upload, Docker)
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+(`yt-upload` im `docker exec`-Aufruf ist hier der `container_name` aus der Compose-Datei oben, nicht der Befehl - bei abweichendem Namen entsprechend anpassen.)
+
+#### Alternative: Scheduler-Sidecar in der docker-compose.yaml (ofelia)
+
+Wer die Terminierung lieber komplett in der `docker-compose.yaml` selbst abbilden will statt auf dem Host, kann einen Scheduler-Sidecar wie [ofelia](https://github.com/mcuadros/ofelia) ergänzen, der per Labels denselben `docker exec`-Aufruf übernimmt:
+
+```yaml
+services:
+  yt-upload:
+    # ... wie oben ...
+    labels:
+      ofelia.enabled: "true"
+      ofelia.job-exec.retry.schedule: "@daily"
+      ofelia.job-exec.retry.command: "yt-upload --requeue-retries"
+
+  ofelia:
+    image: mcuadros/ofelia:latest
+    command: daemon --docker
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - yt-upload
+```
+
+> **⚠️ Warnung:** Das setzt Zugriff auf den Docker-Socket (`/var/run/docker.sock`) im `ofelia`-Container voraus - wer den Socket kontrolliert, kann darüber **jeden** Container auf dem Host starten, stoppen und inspizieren, faktisch also Root-Rechte auf dem gesamten Host, nicht nur auf `yt-upload`. Selbst `:ro` (read-only) mountet nur die Socket-*Datei* schreibgeschützt, verhindert aber nicht, dass die Docker-API darüber beliebige neue, privilegierte Container starten kann. Für die meisten Setups ist der schlankere Host-Cron/-Timer von oben (kein zusätzlicher Container, kein Socket-Mount) deshalb die sicherere Wahl - dieser Weg ist nur für Umgebungen gedacht, die dieses Risiko bewusst eingehen wollen.
+
 ---
 
 ## 🛠️ Bare-Metal-Installation (ohne Docker)
