@@ -11,6 +11,7 @@ pipeline<->youtube_api-Import wäre sonst zirkulär.
 import json
 import logging
 import os
+import shutil
 import sys
 import tempfile
 
@@ -106,6 +107,54 @@ def cleanup_work_files(work_paths, is_error=False):
                 os.unlink(item_path)
         except OSError as e:
             logger.error(f"Fehler beim Löschen von {item_path}: {e}")
+
+
+def requeue_retries():
+    """
+    Verschiebt alle Dateien aus RETRY_DIR zurück nach IN_DIR, damit Auto-Batch
+    oder der Dämon sie erneut versuchen. Gedacht für einen extern getriggerten,
+    periodischen Aufruf (siehe yt-upload-retry.timer) - bewusst OHNE eigenen
+    Cooldown im Code: ein zu früher Retry (z.B. direkt nach einem
+    quotaExceeded, das noch nicht zurückgesetzt ist) scheitert einfach sofort
+    wieder, ohne zusätzliches API-Kontingent zu verbrauchen, und landet erneut
+    hier - das Timer-Intervall selbst ist die einzige Stellschraube für die
+    Kadenz, eine zweite Wartezeit im Code wäre nur doppelte Konfiguration für
+    denselben Zweck.
+
+    Ein evtl. vorhandener Segment-Fortschritt bleibt automatisch erhalten: die
+    Progress-Sidecar-JSON liegt in WORK_DIR unter demselben Dateinamen (siehe
+    _progress_file_path()) und wurde beim Verschieben nach RETRY_DIR nicht mit
+    verschoben - load_segment_progress() findet sie beim erneuten Durchlauf
+    automatisch wieder, sobald resolve_target_path() denselben WORK_DIR-Pfad
+    reproduziert (das Original ist dort ja inzwischen nicht mehr vorhanden).
+
+    Gibt die Anzahl tatsächlich verschobener Dateien zurück.
+    """
+    if not os.path.isdir(config.RETRY_DIR):
+        return 0
+
+    moved = 0
+    for filename in sorted(os.listdir(config.RETRY_DIR)):
+        if filename.startswith("."):
+            continue
+
+        retry_path = os.path.join(config.RETRY_DIR, filename)
+        if not os.path.isfile(retry_path):
+            continue
+
+        target_path = os.path.join(config.IN_DIR, filename)
+        if os.path.lexists(target_path):
+            logger.warning(f"Requeue übersprungen: {filename} liegt bereits in IN_DIR (Namenskollision).")
+            continue
+
+        try:
+            shutil.move(retry_path, target_path)
+            logger.info(f"🔁 Requeue: {filename} zurück nach IN_DIR verschoben.")
+            moved += 1
+        except OSError as e:
+            logger.error(f"Requeue fehlgeschlagen für {filename}: {e}")
+
+    return moved
 
 
 def cleanup_generated_thumbnail(thumb_path):

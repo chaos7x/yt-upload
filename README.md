@@ -17,7 +17,7 @@ Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten 
 * **Metadaten- & Thumbnail-Extraktion:** Liest Titel, Beschreibung, PURL, Genre, Aufnahmedatum und Artist via `ffprobe` aus. Extrahiert automatisch Thumbnails aus MKV-Attachments, MP4-Covern oder generiert ein Frame-Thumbnail.
 * **Verlustfreies FFmpeg-Splitting:** Zertrennt Videos mit einer Laufzeit von über 10 Stunden (36.000 Sekunden) automatisch und ohne Qualitätsverlust (`-c copy`) in durchnummerierte Segmente.
 * **Dynamische Playlist-Verwaltung:** Erstellt und verknüpft Ziel-Playlists automatisch (z. B. auf Basis des `ARTIST`-Tags via `ENABLE_DYNAMIC_PLAYLISTS`).
-* **Robustes Retry & Health-Check:** Prüft Videodateien vor dem Upload auf unvollständige Schreibvorgänge / fehlende `moov`-Atome. Bereits erfolgreich hochgeladene Segmente werden bei einem Fehler im nächsten Segment nicht erneut hochgeladen (Fortschritt wird pro Datei persistiert) - fehlgeschlagene Jobs mit Teilfortschritt landen in `videos/retry`, komplett fehlerhafte in `videos/corrupt`.
+* **Robustes Retry & Health-Check:** Prüft Videodateien vor dem Upload auf unvollständige Schreibvorgänge / fehlende `moov`-Atome. Bereits erfolgreich hochgeladene Segmente werden bei einem Fehler im nächsten Segment nicht erneut hochgeladen (Fortschritt wird pro Datei persistiert) - fehlgeschlagene Jobs mit Teilfortschritt oder einem reinen API-Kontingent-Limit (`quotaExceeded`) landen in `RETRY_DIR`, komplett fehlerhafte in `CORRUPT_DIR`. Ein optionaler `yt-upload-retry.timer` (siehe unten) verschiebt `RETRY_DIR`-Inhalte periodisch automatisch zurück nach `IN_DIR`.
 
 Eine Übersicht der internen Architektur (Module, Datenfluss, Diagramm) findet sich in [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -188,6 +188,28 @@ Das Daemon-Paket legt den Systemuser und den systemd-Service an, startet ihn abe
 systemctl enable --now yt-upload
 ```
 
+**Devuan / Debian ohne systemd (`sysvinit-core`):** Das Daemon-Paket bringt zusätzlich ein klassisches `/etc/init.d/yt-upload`-Skript mit, das `daemon-postinst` automatisch anstelle des systemd-Service registriert, wenn kein systemd läuft:
+
+```bash
+service yt-upload start
+```
+
+#### Optional: Automatischer Retry liegen gebliebener Dateien
+
+Dateien in `RETRY_DIR` (z.B. nach einem tagesaktuellen API-Kontingent-Limit `quotaExceeded`, oder mit bereits teilweise hochgeladenen Segmenten) bleiben dort, bis sie manuell zurück nach `IN_DIR` verschoben werden. Das `yt-upload-daemon`-Paket bringt dafür optional einen systemd-Timer mit, der das automatisch übernimmt:
+
+```bash
+systemctl enable --now yt-upload-retry.timer
+```
+
+Läuft standardmäßig einmal täglich (`OnCalendar=daily`, siehe `yt-upload-retry.timer` - passend zu Googles täglichem Kontingent-Reset, per `systemctl edit yt-upload-retry.timer` beliebig anpassbar) und ruft dabei nur `yt-upload --requeue-retries` auf - ein einmaliger, kurzlebiger Aufruf ohne eigenen Cooldown im Code: ein zu früh erneut versuchter `quotaExceeded`-Fall scheitert einfach sofort wieder (kostet kein zusätzliches Kontingent) und landet erneut in `RETRY_DIR`. Das Timer-Intervall ist damit die einzige Stellschraube für die Retry-Kadenz. Bereits hochgeladene Segmente gehen dabei nie verloren (Fortschritt wird anhand des Dateinamens automatisch wiedergefunden).
+
+Ohne systemd übernimmt cron dieselbe Aufgabe: `/etc/cron.d/yt-upload-retry` wird bereits mitinstalliert, allerdings standardmäßig deaktiviert (die Zeitplan-Zeile ist auskommentiert) - zum Aktivieren einfach einkommentieren:
+
+```bash
+sed -i 's/^#0 3/0 3/' /etc/cron.d/yt-upload-retry
+```
+
 ### Alternative: Standalone .pyz (kein pip/apt nötig)
 
 `./build-pyz.sh` baut aus `src/` je ein selbst-enthaltenes `.pyz` pro Eintrag in `[project.scripts]` (`yt-upload.pyz` und `get-token.pyz`) samt `requests` und optional `inotify` - läuft auf jedem System mit einem nackten `python3`, ganz ohne vorherige `pip install`/`apt install`:
@@ -257,7 +279,7 @@ Alle drei Varianten lassen kein Build-Tooling (`pip`/`setuptools`, sofern nicht 
 
 ## 💻 CLI & Parameter Übersicht
 ```text
-yt-upload [-h] [-v] [-a] [-D] [--healthcheck] [-t TITLE]
+yt-upload [-h] [-v] [-a] [-D] [--healthcheck] [--requeue-retries] [-t TITLE]
           [--title-template TEMPLATE]
           [-d DESCRIPTION | --description-file PATH]
           [-c CATEGORY] [--tags TAGS] [--privacy {public,private,unlisted}]
@@ -370,6 +392,9 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
 
 * `--healthcheck`
   Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort - für Docker `HEALTHCHECK` gedacht, nicht für den interaktiven Gebrauch.
+
+* `--requeue-retries`
+  Verschiebt alle Dateien aus `RETRY_DIR` zurück nach `IN_DIR` und beendet sich sofort - für einen periodischen systemd-Timer gedacht (siehe `yt-upload-retry.timer` weiter oben), kann aber auch manuell aufgerufen werden.
 
 * `-t`, `--title` `TEXT`
   Setzt explizit den Videotitel (überschreibt ausgelesene Metadaten).
