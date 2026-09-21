@@ -180,16 +180,20 @@ jobs:
           cp -r install/yt_upload-*.dist-info pkgroot-cli/usr/lib/python3/dist-packages/
           cp upload.conf.example pkgroot-cli/etc/yt-upload/upload.conf
 
-          mkdir -p pkgroot-daemon/usr/lib/systemd/system pkgroot-daemon/etc/init.d pkgroot-daemon/etc/yt-upload
+          mkdir -p pkgroot-daemon/usr/lib/systemd/system pkgroot-daemon/etc/init.d pkgroot-daemon/etc/cron.d
           cp yt-upload.service pkgroot-daemon/usr/lib/systemd/system/yt-upload.service
           cp yt-upload-retry.service pkgroot-daemon/usr/lib/systemd/system/yt-upload-retry.service
           cp yt-upload-retry.timer pkgroot-daemon/usr/lib/systemd/system/yt-upload-retry.timer
-          # /etc/init.d-Fallback und Cron-Pendant zum Retry-Timer fuer
-          # Nicht-systemd-Hosts (Devuan, Debian mit sysvinit-core) - siehe
-          # daemon-postinst.sh fuer die Registrierung.
+          # /etc/init.d-Fallback fuer Nicht-systemd-Hosts (Devuan, Debian mit
+          # sysvinit-core) - siehe daemon-postinst.sh fuer die Registrierung.
           cp init.d/yt-upload pkgroot-daemon/etc/init.d/yt-upload
           chmod 755 pkgroot-daemon/etc/init.d/yt-upload
-          cp yt-upload-retry.cron.example pkgroot-daemon/etc/yt-upload/yt-upload-retry.cron.example
+          # Cron-Pendant zum Retry-Timer (sysvinit kennt keine Timer-Units) -
+          # standardmaessig auskommentiert/deaktiviert ausgeliefert, auf jedem
+          # Host (auch mit systemd) harmlos, da inaktiv, bis jemand die Zeile
+          # darin einkommentiert. --config-files unten sorgt dafuer, dass ein
+          # spaeteres Einkommentieren ein Upgrade uebersteht.
+          cp yt-upload-retry.cron pkgroot-daemon/etc/cron.d/yt-upload-retry
 
       - name: yt-upload (CLI) .deb bauen
         run: |
@@ -221,6 +225,7 @@ jobs:
             --depends "yt-upload = $DEB_VERSION" \
             --depends python3-inotify \
             --depends adduser \
+            --config-files /etc/cron.d/yt-upload-retry \
             --after-install daemon-postinst.sh \
             --before-remove daemon-prerm.sh \
             --after-remove daemon-postrm.sh \

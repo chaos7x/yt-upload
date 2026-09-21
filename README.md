@@ -204,10 +204,10 @@ systemctl enable --now yt-upload-retry.timer
 
 Läuft standardmäßig einmal täglich (`OnCalendar=daily`, siehe `yt-upload-retry.timer` - passend zu Googles täglichem Kontingent-Reset, per `systemctl edit yt-upload-retry.timer` beliebig anpassbar) und ruft dabei nur `yt-upload --requeue-retries` auf - ein einmaliger, kurzlebiger Aufruf ohne eigenen Cooldown im Code: ein zu früh erneut versuchter `quotaExceeded`-Fall scheitert einfach sofort wieder (kostet kein zusätzliches Kontingent) und landet erneut in `RETRY_DIR`. Das Timer-Intervall ist damit die einzige Stellschraube für die Retry-Kadenz. Bereits hochgeladene Segmente gehen dabei nie verloren (Fortschritt wird anhand des Dateinamens automatisch wiedergefunden).
 
-Ohne systemd übernimmt cron dieselbe Aufgabe - Vorlage liegt bei unter `/etc/yt-upload/yt-upload-retry.cron.example`, zum Aktivieren einfach nach `/etc/cron.d/` kopieren:
+Ohne systemd übernimmt cron dieselbe Aufgabe: `/etc/cron.d/yt-upload-retry` wird bereits mitinstalliert, allerdings standardmäßig deaktiviert (die Zeitplan-Zeile ist auskommentiert) - zum Aktivieren einfach einkommentieren:
 
 ```bash
-cp /etc/yt-upload/yt-upload-retry.cron.example /etc/cron.d/yt-upload-retry
+sed -i 's/^#0 3/0 3/' /etc/cron.d/yt-upload-retry
 ```
 
 ### Alternative: Standalone .pyz (kein pip/apt nötig)

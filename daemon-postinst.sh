@@ -55,7 +55,7 @@ echo ""
 if [ -d /run/systemd/system ]; then
     echo "    systemctl enable --now yt-upload-retry.timer"
 else
-    echo "    cp /etc/yt-upload/yt-upload-retry.cron.example /etc/cron.d/yt-upload-retry"
+    echo "    Zeile in /etc/cron.d/yt-upload-retry einkommentieren (dort deaktiviert ausgeliefert)"
 fi
 echo ""
 

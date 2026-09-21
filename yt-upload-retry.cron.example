@@ -1,9 +1,0 @@
-# SysV-Pendant zu yt-upload-retry.timer (fuer Systeme ohne systemd, z.B.
-# Devuan/sysvinit-core): verschiebt einmal taeglich liegen gebliebene
-# Dateien aus RETRY_DIR zurueck nach IN_DIR. Kein Cooldown noetig (siehe
-# fileutils.requeue_retries()) - das Intervall dieser Zeile ist die einzige
-# Stellschraube fuer die Retry-Kadenz.
-#
-# Zum Aktivieren nach /etc/cron.d/yt-upload-retry kopieren:
-#   cp /etc/yt-upload/yt-upload-retry.cron.example /etc/cron.d/yt-upload-retry
-0 3 * * * yt-upload /usr/bin/yt-upload --requeue-retries >/dev/null 2>&1
