@@ -142,6 +142,42 @@ volumes:
       device: "./log"
 ```
 
+### Optional: Automatischer Retry liegen gebliebener Dateien (Docker)
+
+Die systemd-Timer-/Cron-Lösung aus dem Bare-Metal-Abschnitt (siehe unten) greift in Docker nicht - der Container läuft als Single-Process ohne eigenen Cron/systemd. `--requeue-retries` selbst funktioniert aber unverändert, da es keinen Instanz-Lock braucht und daher problemlos neben dem bereits laufenden `-D`-Prozess im selben Container ausgeführt werden kann - die Terminierung übernimmt stattdessen der **Docker-Host** per `docker exec` in den laufenden Container hinein:
+
+```bash
+# Host-Crontab (crontab -e auf dem Docker-Host)
+0 3 * * * docker exec yt-upload yt-upload --requeue-retries
+```
+
+Nutzt der Host selbst systemd, geht das genauso als Timer (analog zu `yt-upload-retry.timer`, nur mit `docker exec` statt direktem Aufruf):
+
+```ini
+# /etc/systemd/system/yt-upload-retry-docker.service
+[Unit]
+Description=yt-upload (Docker) - Requeue liegen gebliebener Dateien aus RETRY_DIR
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec yt-upload yt-upload --requeue-retries
+```
+
+```ini
+# /etc/systemd/system/yt-upload-retry-docker.timer
+[Unit]
+Description=Periodischer Requeue liegen gebliebener Dateien aus RETRY_DIR (yt-upload, Docker)
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+(`yt-upload` im `docker exec`-Aufruf ist hier der `container_name` aus der Compose-Datei oben, nicht der Befehl - bei abweichendem Namen entsprechend anpassen.) Alternative für alle, die die Terminierung lieber komplett in der `docker-compose.yaml` selbst abbilden wollen: ein Scheduler-Sidecar wie [ofelia](https://github.com/mcuadros/ofelia), der per Labels denselben `docker exec`-Aufruf übernimmt - braucht dafür aber Zugriff auf den Docker-Socket im Sidecar-Container, was faktisch Root-Rechte auf dem Host bedeutet. Für die meisten Setups ist der schlankere Host-Cron/-Timer ohne zusätzlichen Container und ohne Socket-Mount die bessere Wahl.
+
 ---
 
 ## 🛠️ Bare-Metal-Installation (ohne Docker)
