@@ -27,22 +27,36 @@ chmod 2775 /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipelin
 
 # /run/systemd/system existiert nur, wenn systemd tatsaechlich als Init-System
 # laeuft (nicht z.B. in einem Chroot/Container-Build ohne systemd) - ohne
-# diese Absicherung wuerde die Paketinstallation dort fehlschlagen.
+# diese Absicherung wuerde die Paketinstallation dort fehlschlagen. Auf einem
+# Nicht-systemd-Host (Devuan, Debian mit sysvinit-core) wird stattdessen das
+# mitgelieferte /etc/init.d/yt-upload per update-rc.d registriert - beide
+# Zweige schliessen sich damit gegenseitig aus, es wird nie beides parallel
+# verwaltet.
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
+elif command -v update-rc.d >/dev/null 2>&1; then
+    update-rc.d yt-upload defaults >/dev/null
 fi
 
 echo ""
-echo "yt-upload-daemon wurde installiert, der systemd-Service ist aber noch NICHT aktiviert."
+echo "yt-upload-daemon wurde installiert, der Dienst ist aber noch NICHT aktiviert."
 echo "Bitte zuerst [paths] in /etc/yt-upload/upload.conf setzen und einmalig"
 echo "'get-token' ausfuehren, dann den Dienst manuell aktivieren und starten:"
 echo ""
-echo "    systemctl enable --now yt-upload"
+if [ -d /run/systemd/system ]; then
+    echo "    systemctl enable --now yt-upload"
+else
+    echo "    service yt-upload start"
+fi
 echo ""
 echo "Optional: liegen gebliebene Dateien in RETRY_DIR (z.B. nach einem"
 echo "quotaExceeded) taeglich automatisch zurueck nach IN_DIR verschieben:"
 echo ""
-echo "    systemctl enable --now yt-upload-retry.timer"
+if [ -d /run/systemd/system ]; then
+    echo "    systemctl enable --now yt-upload-retry.timer"
+else
+    echo "    cp /etc/yt-upload/yt-upload-retry.cron.example /etc/cron.d/yt-upload-retry"
+fi
 echo ""
 
 exit 0

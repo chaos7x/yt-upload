@@ -188,6 +188,12 @@ Das Daemon-Paket legt den Systemuser und den systemd-Service an, startet ihn abe
 systemctl enable --now yt-upload
 ```
 
+**Devuan / Debian ohne systemd (`sysvinit-core`):** Das Daemon-Paket bringt zusätzlich ein klassisches `/etc/init.d/yt-upload`-Skript mit, das `daemon-postinst` automatisch anstelle des systemd-Service registriert, wenn kein systemd läuft:
+
+```bash
+service yt-upload start
+```
+
 #### Optional: Automatischer Retry liegen gebliebener Dateien
 
 Dateien in `RETRY_DIR` (z.B. nach einem tagesaktuellen API-Kontingent-Limit `quotaExceeded`, oder mit bereits teilweise hochgeladenen Segmenten) bleiben dort, bis sie manuell zurück nach `IN_DIR` verschoben werden. Das `yt-upload-daemon`-Paket bringt dafür optional einen systemd-Timer mit, der das automatisch übernimmt:
@@ -197,6 +203,12 @@ systemctl enable --now yt-upload-retry.timer
 ```
 
 Läuft standardmäßig einmal täglich (`OnCalendar=daily`, siehe `yt-upload-retry.timer` - passend zu Googles täglichem Kontingent-Reset, per `systemctl edit yt-upload-retry.timer` beliebig anpassbar) und ruft dabei nur `yt-upload --requeue-retries` auf - ein einmaliger, kurzlebiger Aufruf ohne eigenen Cooldown im Code: ein zu früh erneut versuchter `quotaExceeded`-Fall scheitert einfach sofort wieder (kostet kein zusätzliches Kontingent) und landet erneut in `RETRY_DIR`. Das Timer-Intervall ist damit die einzige Stellschraube für die Retry-Kadenz. Bereits hochgeladene Segmente gehen dabei nie verloren (Fortschritt wird anhand des Dateinamens automatisch wiedergefunden).
+
+Ohne systemd übernimmt cron dieselbe Aufgabe - Vorlage liegt bei unter `/etc/yt-upload/yt-upload-retry.cron.example`, zum Aktivieren einfach nach `/etc/cron.d/` kopieren:
+
+```bash
+cp /etc/yt-upload/yt-upload-retry.cron.example /etc/cron.d/yt-upload-retry
+```
 
 ### Alternative: Standalone .pyz (kein pip/apt nötig)
 
