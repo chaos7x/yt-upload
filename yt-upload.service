@@ -13,5 +13,36 @@ ExecStart=/usr/bin/yt-upload -D
 Restart=on-failure
 RestartSec=5
 
+# --- Hardening ---
+# ReadWritePaths deckt genau das ab, was der Daemon tatsaechlich beschreibt:
+# /srv/media-pipeline (IN_DIR/WORK_DIR/DONE_DIR/CORRUPT_DIR/RETRY_DIR),
+# /var/log/yt-upload (Standard-Logpfad, siehe config.py:_default_log_file()) und
+# /etc/yt-upload (CREDENTIALS_FILE-Berechtigungskorrektur per os.chmod, siehe
+# youtube_api.get_access_token() - nur relevant, wenn CREDENTIALS_FILE/
+# upload.conf tatsaechlich auf einen Pfad darunter zeigen). Wer abweichende
+# Pfade konfiguriert (LOG_FILE/CREDENTIALS_FILE/IN_DIR/...), muss sie hier
+# ergaenzen, sonst schlaegt der jeweilige Schreibzugriff fehl.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/media-pipeline /var/log/yt-upload /etc/yt-upload
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+# Nur TCP/IP wird tatsaechlich gebraucht (YouTube/Google-API via requests) -
+# inotify nutzt reine Syscalls (kein Socket), Logging nur Datei/stdout (kein
+# Syslog-Socket). Bei eigenen Erweiterungen, die z.B. einen Unix-Socket
+# brauchen, diese Zeile entsprechend erweitern oder entfernen.
+RestrictAddressFamilies=AF_INET AF_INET6
+
 [Install]
 WantedBy=multi-user.target
