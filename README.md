@@ -176,7 +176,31 @@ Persistent=true
 WantedBy=timers.target
 ```
 
-(`yt-upload` im `docker exec`-Aufruf ist hier der `container_name` aus der Compose-Datei oben, nicht der Befehl - bei abweichendem Namen entsprechend anpassen.) Alternative für alle, die die Terminierung lieber komplett in der `docker-compose.yaml` selbst abbilden wollen: ein Scheduler-Sidecar wie [ofelia](https://github.com/mcuadros/ofelia), der per Labels denselben `docker exec`-Aufruf übernimmt - braucht dafür aber Zugriff auf den Docker-Socket im Sidecar-Container, was faktisch Root-Rechte auf dem Host bedeutet. Für die meisten Setups ist der schlankere Host-Cron/-Timer ohne zusätzlichen Container und ohne Socket-Mount die bessere Wahl.
+(`yt-upload` im `docker exec`-Aufruf ist hier der `container_name` aus der Compose-Datei oben, nicht der Befehl - bei abweichendem Namen entsprechend anpassen.)
+
+#### Alternative: Scheduler-Sidecar in der docker-compose.yaml (ofelia)
+
+Wer die Terminierung lieber komplett in der `docker-compose.yaml` selbst abbilden will statt auf dem Host, kann einen Scheduler-Sidecar wie [ofelia](https://github.com/mcuadros/ofelia) ergänzen, der per Labels denselben `docker exec`-Aufruf übernimmt:
+
+```yaml
+services:
+  yt-upload:
+    # ... wie oben ...
+    labels:
+      ofelia.enabled: "true"
+      ofelia.job-exec.retry.schedule: "@daily"
+      ofelia.job-exec.retry.command: "yt-upload --requeue-retries"
+
+  ofelia:
+    image: mcuadros/ofelia:latest
+    command: daemon --docker
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - yt-upload
+```
+
+> **⚠️ Warnung:** Das setzt Zugriff auf den Docker-Socket (`/var/run/docker.sock`) im `ofelia`-Container voraus - wer den Socket kontrolliert, kann darüber **jeden** Container auf dem Host starten, stoppen und inspizieren, faktisch also Root-Rechte auf dem gesamten Host, nicht nur auf `yt-upload`. Selbst `:ro` (read-only) mountet nur die Socket-*Datei* schreibgeschützt, verhindert aber nicht, dass die Docker-API darüber beliebige neue, privilegierte Container starten kann. Für die meisten Setups ist der schlankere Host-Cron/-Timer von oben (kein zusätzlicher Container, kein Socket-Mount) deshalb die sicherere Wahl - dieser Weg ist nur für Umgebungen gedacht, die dieses Risiko bewusst eingehen wollen.
 
 ---
 
