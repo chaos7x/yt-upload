@@ -766,7 +766,15 @@ def upload_single_video(
             if open_link:
                 v_url = f"https://www.youtube.com/watch?v={video_id}"
                 logger.info(f"Öffne Browser-Link: {v_url}")
-                webbrowser.open(v_url)
+                # Rein optionaler Komfort-Nebeneffekt (nur im manuellen CLI-Modus
+                # erreichbar, siehe pipeline.py) - auf einem Headless-Server ohne
+                # registrierbaren Browser wirft dies webbrowser.Error, was sonst
+                # den bereits erfolgreichen Upload faelschlich als Fehlschlag
+                # markieren wuerde (video_id ist an dieser Stelle schon vergeben).
+                try:
+                    webbrowser.open(v_url)
+                except (webbrowser.Error, OSError) as e:
+                    logger.warning(f"Konnte Browser nicht öffnen ({e}): {v_url}")
     finally:
         cleanup_generated_thumbnail(thumb_path)
 

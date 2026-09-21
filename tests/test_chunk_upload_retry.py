@@ -404,3 +404,69 @@ class TestChunkUploadContentRangeProbe:
 
         # Kein weiterer Retry-Versuch des eigentlichen Chunks nach dem gescheiterten Status-Check
         assert fake_session.put_calls == 2
+
+
+class TestOpenLinkFailureHandling:
+    """
+    --open-link ist nur im manuellen CLI-Modus erreichbar (pipeline.py setzt
+    open_link sonst immer False), aber genau dort ohne echte Desktop-Session
+    (z.B. ein Server per SSH ohne registrierbaren Browser) wirft
+    webbrowser.open() eine webbrowser.Error. Ohne eigenes try/except hätte das
+    einen zu diesem Zeitpunkt bereits erfolgreichen Upload (video_id ist
+    längst vergeben) fälschlich als Fehlschlag markiert.
+    """
+
+    def test_browser_error_does_not_fail_an_otherwise_successful_upload(self, youtube_api, monkeypatch, video_file, caplog):
+        init_response = FakeResponse(200, headers={"Location": "https://fake/session-open-link"})
+        put_response = FakeResponse(200, json_data={"id": "vid_open_link"})
+        fake_session = FakeSession(init_response, [put_response])
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        def raise_no_browser(_url):
+            raise youtube_api.webbrowser.Error("could not locate runnable browser")
+
+        monkeypatch.setattr(youtube_api.webbrowser, "open", raise_no_browser)
+
+        with caplog.at_level("WARNING"):
+            result = youtube_api.upload_single_video(
+                file_path=video_file, title="Test", desc="", category=None, tags=None,
+                rec_date=None, thumb_path=None, playlist_name=None, open_link=True
+            )
+
+        assert result == "vid_open_link"
+        assert any("Konnte Browser nicht öffnen" in r.message for r in caplog.records)
+
+    def test_browser_oserror_is_also_caught(self, youtube_api, monkeypatch, video_file):
+        init_response = FakeResponse(200, headers={"Location": "https://fake/session-open-link-os"})
+        put_response = FakeResponse(200, json_data={"id": "vid_open_link_os"})
+        fake_session = FakeSession(init_response, [put_response])
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        def raise_oserror(_url):
+            raise FileNotFoundError("xdg-open not found")
+
+        monkeypatch.setattr(youtube_api.webbrowser, "open", raise_oserror)
+
+        result = youtube_api.upload_single_video(
+            file_path=video_file, title="Test", desc="", category=None, tags=None,
+            rec_date=None, thumb_path=None, playlist_name=None, open_link=True
+        )
+
+        assert result == "vid_open_link_os"
+
+    def test_successful_browser_open_is_still_called(self, youtube_api, monkeypatch, video_file):
+        init_response = FakeResponse(200, headers={"Location": "https://fake/session-open-link-ok"})
+        put_response = FakeResponse(200, json_data={"id": "vid_open_link_ok"})
+        fake_session = FakeSession(init_response, [put_response])
+        _install_fake_session(monkeypatch, youtube_api, fake_session)
+
+        opened = []
+        monkeypatch.setattr(youtube_api.webbrowser, "open", lambda url: opened.append(url) or True)
+
+        result = youtube_api.upload_single_video(
+            file_path=video_file, title="Test", desc="", category=None, tags=None,
+            rec_date=None, thumb_path=None, playlist_name=None, open_link=True
+        )
+
+        assert result == "vid_open_link_ok"
+        assert opened == ["https://www.youtube.com/watch?v=vid_open_link_ok"]
