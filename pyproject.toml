@@ -1,6 +1,6 @@
 [project]
 name = "yt-upload"
-version = "1.9.4"
+version = "1.9.5"
 description = "Automatisierter YouTube Upload Workflow"
 readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.11"
