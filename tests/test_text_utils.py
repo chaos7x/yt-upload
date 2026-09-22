@@ -12,8 +12,23 @@ class TestSanitizeText:
     def test_removes_control_characters(self, text_utils):
         assert text_utils.sanitize_text("Hello\x00World") == "HelloWorld"
 
-    def test_collapses_whitespace(self, text_utils):
-        assert text_utils.sanitize_text("Hello   \n\t  World") == "Hello World"
+    def test_collapses_horizontal_whitespace(self, text_utils):
+        assert text_utils.sanitize_text("Hello   \t  World") == "Hello World"
+
+    def test_preserves_newlines(self, text_utils):
+        """
+        Regression: unicodedata.category('\\n') ist 'Cc' (Steuerzeichen) und
+        wurde deshalb faelschlich mitentfernt, das anschliessende \\s+ haette
+        verbleibende Umbrueche zusaetzlich zu einem Leerzeichen kollabiert -
+        eine mehrzeilige Video-Beschreibung (z.B. von yt-dlp erzeugt, mit
+        Absaetzen zwischen Werbung/Links/Quellen) wurde dadurch beim Upload zu
+        einem einzigen Textblock zusammengequetscht.
+        """
+        assert text_utils.sanitize_text("Hello   \n\t  World") == "Hello\nWorld"
+
+    def test_preserves_paragraph_breaks_and_trims_each_line(self, text_utils):
+        multiline = "Zeile 1  \n\n  Zeile 2\t\nZeile 3   "
+        assert text_utils.sanitize_text(multiline) == "Zeile 1\n\nZeile 2\nZeile 3"
 
     def test_empty_string_stays_empty(self, text_utils):
         assert text_utils.sanitize_text("") == ""
