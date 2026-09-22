@@ -125,7 +125,23 @@ LOG_FILE = _env_log_file_override or _default_log_file()
 # Wird von logging_setup.setup_logging() genutzt, um den Datei-Handler auch
 # ohne Syslog-Daemon zu aktivieren, wenn der Pfad ausdrücklich konfiguriert wurde.
 LOG_FILE_EXPLICIT = bool(_env_log_file_override)
-CREDENTIALS_FILE = os.environ.get('CREDENTIALS_FILE', "/app/oauth/youtube-upload-credentials.json" if os.path.exists("/app/oauth") else os.path.join(BASE_DIR, "youtube-upload-credentials.json"))
+
+
+def _resolve_credentials_file(in_container: bool) -> str:
+    """
+    Bare-Metal-Default ist /etc/yt-upload/ (derselbe Ort wie upload.conf),
+    nicht BASE_DIR (Installationsort des Python-Packages, z.B.
+    site-packages) - dort war die Datei für den dedizierten
+    yt-upload-Systemuser weder zuverlässig auffindbar noch beschreibbar.
+    get_token.py (get-token) nutzt denselben Default (siehe dortiger
+    Kommentar), damit beide Tools ohne manuelle ENV-Konfiguration dieselbe
+    Datei meinen.
+    """
+    default = "/app/oauth/youtube-upload-credentials.json" if in_container else "/etc/yt-upload/youtube-upload-credentials.json"
+    return os.environ.get('CREDENTIALS_FILE', default)
+
+
+CREDENTIALS_FILE = _resolve_credentials_file(os.path.exists("/app/oauth"))
 
 # Heartbeat-Datei für den Healthcheck (z.B. Docker HEALTHCHECK). Der Dämon
 # aktualisiert sie regelmäßig; ein separater, sehr leichtgewichtiger Aufruf

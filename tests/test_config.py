@@ -1,4 +1,4 @@
-"""Tests für load_configuration() und _resolve_log_level_name() (config.py)."""
+"""Tests für load_configuration(), _resolve_log_level_name() und _resolve_credentials_file() (config.py)."""
 
 
 def _write_config(tmp_path, content):
@@ -33,6 +33,32 @@ class TestResolveLogLevelName:
 
         assert config._resolve_log_level_name(debug_mode=False) == "INFO"
         assert config._resolve_log_level_name(debug_mode=True) == "DEBUG"
+
+
+class TestResolveCredentialsFile:
+    """
+    Bare-Metal-Default ist /etc/yt-upload/ (derselbe Ort wie upload.conf),
+    nicht BASE_DIR (Installationsort des Python-Packages) - dort war die
+    Datei für den dedizierten yt-upload-Systemuser weder zuverlässig
+    auffindbar noch beschreibbar, und das README beschrieb fälschlich
+    /app/oauth/... auch für Bare-Metal (das ist nur der Container-Default).
+    """
+
+    def test_bare_metal_default_is_etc_yt_upload(self, config, monkeypatch):
+        monkeypatch.delenv("CREDENTIALS_FILE", raising=False)
+
+        assert config._resolve_credentials_file(in_container=False) == "/etc/yt-upload/youtube-upload-credentials.json"
+
+    def test_container_default_is_app_oauth(self, config, monkeypatch):
+        monkeypatch.delenv("CREDENTIALS_FILE", raising=False)
+
+        assert config._resolve_credentials_file(in_container=True) == "/app/oauth/youtube-upload-credentials.json"
+
+    def test_explicit_env_var_takes_precedence(self, config, monkeypatch):
+        monkeypatch.setenv("CREDENTIALS_FILE", "/custom/path.json")
+
+        assert config._resolve_credentials_file(in_container=False) == "/custom/path.json"
+        assert config._resolve_credentials_file(in_container=True) == "/custom/path.json"
 
 
 class TestLoadConfigurationParsingErrors:

@@ -229,7 +229,7 @@ cd /pfad/zu/yt-upload
 pip install --break-system-packages --no-deps .
 ```
 
-Danach stehen die Befehle `yt-upload` und `get-token` systemweit zur Verfügung (`yt-upload --version` zum Testen). `get-token` führt denselben interaktiven OAuth-Flow wie im Docker-Setup (Schritt 3 oben) aus, liest `client_secrets.json` dabei aber standardmäßig von `/app/oauth/client_secrets.json` (per `CLIENT_SECRETS_FILE`-Konstante im Skript anpassbar) und schreibt die Credentials nach `/app/oauth/youtube-upload-credentials.json`. Für ein Update genügt ein erneuter `pip install ...`-Aufruf im aktualisierten Repo-Verzeichnis.
+Danach stehen die Befehle `yt-upload` und `get-token` systemweit zur Verfügung (`yt-upload --version` zum Testen). `get-token` führt denselben interaktiven OAuth-Flow wie im Docker-Setup (Schritt 3 oben) aus, liest `client_secrets.json` dabei aber standardmäßig von `/etc/yt-upload/client_secrets.json` (per `CLIENT_SECRETS_FILE`-Umgebungsvariable anpassbar) und schreibt die Credentials nach `/etc/yt-upload/youtube-upload-credentials.json` - derselbe Pfad, den auch der `yt-upload`-Dienst selbst als Standard erwartet (keine `/app/oauth`-Docker-Konvention auf Bare-Metal). Existiert bereits der dedizierte `yt-upload`-Systemuser (Dämon-Paket installiert), chownt `get-token` die Datei automatisch auf ihn, damit der Dämon sie lesen kann, auch wenn `get-token` selbst als root/Admin lief. Für ein Update genügt ein erneuter `pip install ...`-Aufruf im aktualisierten Repo-Verzeichnis.
 
 Die Logdatei landet je nach Umgebung automatisch am sinnvollsten Ort (`/var/log/yt-upload/`, sofern beschreibbar und ein klassischer Syslog-Daemon läuft, sonst nur auf `stdout`/journald) - siehe `LOG_FILE`-Umgebungsvariable, falls ein fester Pfad gewünscht ist. Läuft ein Syslog-Daemon, rotiert die App die Datei bewusst **nicht** selbst (kein `RotatingFileHandler`) - das übernimmt das mitgelieferte `/etc/logrotate.d/yt-upload` (nur im `.deb`-Paket enthalten; bei einer reinen `pip`-Installation ohne `.deb` selbst einrichten, falls gewünscht). Nur bei explizit gesetztem `LOG_FILE` oder einem gemounteten Docker-`/log`-Volume rotiert die App eigenständig, da dort sonst niemand rotieren würde.
 
@@ -296,7 +296,7 @@ sed -i 's/^#0 3/0 3/' /etc/cron.d/yt-upload-retry
 
 `CREDENTIALS_FILE` ist per Env-Var überschreibbar (`config.py`) - das lässt sich mit `LoadCredentialEncrypted=` (systemd >= 250) kombinieren, um die OAuth-Credentials-Datei nicht mehr dauerhaft als Klartext auf der Platte liegen zu haben. Anders als eine App-seitige Verschlüsselung mit Schlüssel direkt daneben ist das ein echter Gewinn: der `yt-upload`-Systemuser selbst braucht dafür nie Lesezugriff auf den Master-Key - nur `systemd` (PID 1, root) entschlüsselt beim Service-Start und reicht dem Prozess ausschließlich eine Kopie in einem privaten, nur für ihn lesbaren tmpfs-Verzeichnis durch.
 
-**Pfad beachten:** Ohne explizite `credentials_file`-Konfiguration gibt es bare-metal keinen einheitlichen Standardpfad - `get-token` schreibt ohne `/app/oauth` (Docker-Konvention) standardmäßig relativ ins aktuelle Arbeitsverzeichnis, während der `yt-upload`-Dienst selbst auf sein Installationsverzeichnis zurückfällt. Für den Dämon-Betrieb daher **zuerst** `credentials_file = /etc/yt-upload/youtube-upload-credentials.json` in `/etc/yt-upload/upload.conf` eintragen (oder einen anderen festen Pfad wählen) und `get-token` mit passend gesetzter `CREDENTIALS_FILE`-Umgebungsvariable ausführen, damit beide auf dieselbe Datei zeigen - erst danach ergibt das Verschlüsseln unten Sinn:
+`get-token` und der `yt-upload`-Dienst nutzen bare-metal standardmäßig beide `/etc/yt-upload/youtube-upload-credentials.json` (ohne `/app/oauth`, das ist nur die Docker-Konvention) - keine manuelle `CREDENTIALS_FILE`-Konfiguration nötig, bevor es weitergeht:
 
 Am saubersten über ein Override-Snippet statt direkt in der von `.deb`/systemd verwalteten Unit-Datei (bleibt so update-sicher):
 
@@ -331,7 +331,7 @@ systemctl restart yt-upload
 shred -u /etc/yt-upload/youtube-upload-credentials.json
 ```
 
-`get-token` selbst bleibt davon unberührt - es muss weiterhin einmalig interaktiv laufen (mit der oben genannten `CREDENTIALS_FILE`-Umgebungsvariable) und die Klartext-Datei erst erzeugen, bevor sie in Schritt 1 verschlüsselt wird.
+`get-token` selbst bleibt davon unberührt - es muss weiterhin einmalig interaktiv laufen und die Klartext-Datei erst erzeugen, bevor sie in Schritt 1 verschlüsselt wird.
 
 ---
 
@@ -394,8 +394,9 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
 # Pfad zur zentralen Logdatei
 #log_file = /log/upload.log
 
-# Pfad zu den Google OAuth Credentials
-#credentials_file = /app/oauth/youtube-upload-credentials.json
+# Pfad zu den Google OAuth Credentials. Ohne diese Angabe: /app/oauth/... in
+# Docker (siehe dortiges Bind-Mount), sonst /etc/yt-upload/... auf Bare-Metal.
+#credentials_file = /etc/yt-upload/youtube-upload-credentials.json
 
 
 [settings]
