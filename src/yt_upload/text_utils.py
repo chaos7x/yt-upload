@@ -91,7 +91,14 @@ def normalize_recording_date(value):
 
 
 def sanitize_text(text):
-    """Entfernt Steuerzeichen und ungültige Klammern (<, >) für die YouTube API."""
+    """
+    Entfernt Steuerzeichen und ungültige Klammern (<, >) für die YouTube API,
+    bewahrt aber bewusst Zeilenumbrüche (\\n) - mehrzeilige Beschreibungen
+    (z.B. von yt-dlp mit --embed-metadata erzeugte Video-Beschreibungen mit
+    Absätzen/Links) würden sonst zu einem einzigen Textblock zusammengequetscht.
+    unicodedata.category('\\n') ist 'Cc' (Steuerzeichen) und würde ohne
+    Sonderbehandlung mitentfernt.
+    """
     if not text:
         return text
 
@@ -101,10 +108,14 @@ def sanitize_text(text):
     # Spitzzeichen für die API entfernen
     text = text.replace("<", "").replace(">", "")
 
-    # Steuerzeichen entfernen, Unicode-Symbole & Umlaute beibehalten
-    cleaned_chars = [c for c in text if unicodedata.category(c) != 'Cc']
+    # Steuerzeichen entfernen (NUL, BEL etc.), \n dabei ausdrücklich erhalten
+    cleaned_chars = [c for c in text if c == '\n' or unicodedata.category(c) != 'Cc']
     result = ''.join(cleaned_chars)
-    return re.sub(r'\s+', ' ', result).strip()
+
+    # Nur horizontalen Whitespace (Leerzeichen/Tabs/\r) pro Zeile zusammenfassen -
+    # \s+ würde \n mit erfassen und die Zeilenumbrüche doch wieder zerstören.
+    lines = [re.sub(r'[^\S\n]+', ' ', line).strip() for line in result.split('\n')]
+    return '\n'.join(lines).strip()
 
 
 def parse_location(location_str):
