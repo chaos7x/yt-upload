@@ -56,6 +56,10 @@ def setup_logging():
       mitgeliefertes /etc/logrotate.d/yt-upload) - zwei unabhängige
       Rotationsmechanismen auf derselben Datei würden sich nur gegenseitig
       ins Gehege kommen.
+    - Log-Level über config.LOG_LEVEL_NAME (DEBUG/INFO/WARNING/ERROR/
+      CRITICAL, per LOG_LEVEL-ENV steuerbar) - DEBUG=true/yes/1 bleibt als
+      abwärtskompatible Kurzform für LOG_LEVEL=DEBUG nutzbar, siehe
+      config.py.
     """
     stdout_formatter = logging.Formatter("[%(levelname)s] %(message)s")
     file_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
@@ -94,7 +98,7 @@ def setup_logging():
             file_log_error = str(e)
 
     logging.basicConfig(
-        level=logging.DEBUG if config.DEBUG_MODE else logging.INFO,
+        level=getattr(logging, config.LOG_LEVEL_NAME),
         handlers=log_handlers
     )
 
