@@ -142,6 +142,18 @@ volumes:
       device: "./log"
 ```
 
+#### 🔗 Interop mit Bare-Metal (gemeinsamer Host-Pfad)
+
+`user: "11107:11108"` oben ist nur ein Platzhalter. Läuft `fetchbridge`/`tw-recorder` (oder beide) als Bare-Metal-/`.deb`-Installation statt als Container, mountest du `yt-upload-data` statt auf `./yt-upload-data` direkt auf den echten Host-Pfad `/srv/media-pipeline` (`device: "/srv/media-pipeline"` oben, oder bei `docker run` direkt `-v /srv/media-pipeline:/srv/media-pipeline:rw`).
+
+`/srv/media-pipeline` gehört dort `root:media-pipeline` mit Modus `2775` (setgid, bewusst **ohne** Sticky-Bit) - Schreib-/Löschrecht hängt also rein an der **Gruppe**, nicht an der UID oder dem Datei-Owner. Die GID im `user:`-Feld muss deshalb mit der echten Host-Gruppe übereinstimmen, sonst gibt's `Permission denied`:
+
+```bash
+getent group media-pipeline   # z.B. media-pipeline:x:998:
+```
+
+Die zweite Zahl in `user: "<uid>:<gid>"` durch diese echte GID ersetzen (z.B. `user: "11107:998"`) - die UID (erste Zahl) ist frei wählbar, da sie für die Zugriffsrechte auf dieses Verzeichnis keine Rolle spielt.
+
 ### Optional: Automatischer Retry liegen gebliebener Dateien (Docker)
 
 Die systemd-Timer-/Cron-Lösung aus dem Bare-Metal-Abschnitt (siehe unten) greift in Docker nicht - der Container läuft als Single-Process ohne eigenen Cron/systemd. `--requeue-retries` selbst funktioniert aber unverändert, da es keinen Instanz-Lock braucht und daher problemlos neben dem bereits laufenden `-D`-Prozess im selben Container ausgeführt werden kann - die Terminierung übernimmt stattdessen der **Docker-Host** per `docker exec` in den laufenden Container hinein:
