@@ -37,6 +37,49 @@ def _write_secrets_file(tmp_path, content):
     return str(path)
 
 
+class _FakePwEntry:
+    def __init__(self, uid, gid):
+        self.pw_uid = uid
+        self.pw_gid = gid
+
+
+class TestChownToServiceUser:
+    def test_chowns_to_existing_service_user(self, get_token_module, tmp_path, monkeypatch):
+        target = tmp_path / "creds.json"
+        target.write_text("{}", encoding="utf-8")
+        chown_calls = []
+
+        monkeypatch.setattr(get_token_module.pwd, "getpwnam", lambda name: _FakePwEntry(1234, 5678))
+        monkeypatch.setattr(get_token_module.os, "chown", lambda path, uid, gid: chown_calls.append((path, uid, gid)))
+
+        get_token_module._chown_to_service_user(str(target), "yt-upload")
+
+        assert chown_calls == [(str(target), 1234, 5678)]
+
+    def test_missing_service_user_is_not_an_error(self, get_token_module, tmp_path, monkeypatch):
+        target = tmp_path / "creds.json"
+        target.write_text("{}", encoding="utf-8")
+
+        def raise_keyerror(name):
+            raise KeyError(name)
+
+        monkeypatch.setattr(get_token_module.pwd, "getpwnam", raise_keyerror)
+
+        get_token_module._chown_to_service_user(str(target), "yt-upload")  # darf nicht raisen
+
+    def test_permission_error_on_chown_is_not_an_error(self, get_token_module, tmp_path, monkeypatch):
+        target = tmp_path / "creds.json"
+        target.write_text("{}", encoding="utf-8")
+
+        def raise_permission_error(path, uid, gid):
+            raise PermissionError("Operation not permitted")
+
+        monkeypatch.setattr(get_token_module.pwd, "getpwnam", lambda name: _FakePwEntry(1234, 5678))
+        monkeypatch.setattr(get_token_module.os, "chown", raise_permission_error)
+
+        get_token_module._chown_to_service_user(str(target), "yt-upload")  # darf nicht raisen
+
+
 class TestLoadClientSecrets:
     def test_installed_format_with_defaults(self, get_token_module, tmp_path, monkeypatch):
         secrets_path = _write_secrets_file(tmp_path, {

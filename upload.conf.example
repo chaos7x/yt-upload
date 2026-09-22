@@ -22,8 +22,9 @@
 # Pfad zur zentralen Logdatei
 #log_file = /log/upload.log
 
-# Pfad zu den Google OAuth Credentials
-#credentials_file = /app/oauth/youtube-upload-credentials.json
+# Pfad zu den Google OAuth Credentials. Ohne diese Angabe: /app/oauth/... in
+# Docker (siehe dortiges Bind-Mount), sonst /etc/yt-upload/... auf Bare-Metal.
+#credentials_file = /etc/yt-upload/youtube-upload-credentials.json
 
 
 [settings]

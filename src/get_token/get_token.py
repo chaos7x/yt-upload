@@ -2,6 +2,7 @@
 
 import json
 import os
+import pwd
 import secrets
 import sys
 import webbrowser
@@ -25,27 +26,45 @@ import requests
 USE_LOCAL_SERVER = os.environ.get("OAUTH_LOCAL_SERVER", "").strip().lower() in ("true", "yes", "1", "on")
 
 # Gleiche Container-Erkennung wie yt_upload.config (os.path.exists("/app/oauth")):
-# Docker mountet die OAuth-Secrets/Credentials dorthin. Bare-Metal hat keinen
-# solchen fixen Pfad - dort ist der einzige sinnvolle Default das aktuelle
-# Arbeitsverzeichnis (relativer Pfad), da get-token im Gegensatz zum
-# dauerhaft laufenden yt-upload-Dienst ein einmaliges, interaktiv vom Nutzer
-# aus einem Terminal aufgerufenes Setup-Tool ist - ein fixer, am
-# Installationsort (z.B. site-packages) orientierter Pfad wäre dort weder
-# auffindbar noch beschreibbar. Per Umgebungsvariable überschreibbar, damit
-# beide Skripte bei Bedarf explizit auf dieselbe Datei zeigen können.
+# Docker mountet die OAuth-Secrets/Credentials dorthin. Bare-Metal nutzt
+# /etc/yt-upload/ - denselben Ort, an dem auch upload.conf liegt - statt
+# eines am Installationsort (z.B. site-packages) orientierten Pfads (dort
+# weder auffindbar noch für den dedizierten yt-upload-Systemuser beschreibbar/
+# lesbar) oder des früheren, nicht dokumentierten CWD-relativen Defaults. Per
+# Umgebungsvariable überschreibbar, damit beide Skripte bei Bedarf explizit
+# auf dieselbe Datei zeigen können.
 _IN_CONTAINER = os.path.exists("/app/oauth")
 CLIENT_SECRETS_FILE = os.environ.get(
     "CLIENT_SECRETS_FILE",
-    "/app/oauth/client_secrets.json" if _IN_CONTAINER else "client_secrets.json",
+    "/app/oauth/client_secrets.json" if _IN_CONTAINER else "/etc/yt-upload/client_secrets.json",
 )
 OUTPUT_CREDENTIALS_FILE = os.environ.get(
     "CREDENTIALS_FILE",
-    "/app/oauth/youtube-upload-credentials.json" if _IN_CONTAINER else "youtube-upload-credentials.json",
+    "/app/oauth/youtube-upload-credentials.json" if _IN_CONTAINER else "/etc/yt-upload/youtube-upload-credentials.json",
 )
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube"
 ]
+
+
+def _chown_to_service_user(path: str, username: str) -> None:
+    """
+    get-token läuft typischerweise einmalig als root/Admin (interaktiver
+    OAuth-Flow), der Dämon selbst aber als dedizierter, eingeschränkter
+    Systemuser (siehe yt-upload-daemon-Paket) - ohne diesen chown bliebe die
+    Datei root:root 600 und wäre für den Dämon unlesbar (derselbe Bug wie
+    ein manuell mit falschem Owner angelegtes tw-recorder-conf.d-File).
+    Existiert der User nicht (z.B. reine yt-upload-CLI-Installation ohne
+    Dämon-Paket, oder Docker) oder fehlen die Rechte für chown (z.B. ohne
+    root), bleibt die Datei einfach beim aufrufenden User - kein Fehlerfall,
+    der den ganzen OAuth-Flow abbrechen dürfte.
+    """
+    try:
+        pw_entry = pwd.getpwnam(username)
+        os.chown(path, pw_entry.pw_uid, pw_entry.pw_gid)
+    except (KeyError, OSError):
+        pass
 
 
 def load_client_secrets():
@@ -181,12 +200,13 @@ def get_authorization_code(auth_uri, token_uri, client_id, redirect_uri, client_
 
 def main():
     try:
-        # Zielverzeichnis automatisch anlegen, falls es noch nicht existiert.
-        # os.path.dirname() liefert bei einem reinen Dateinamen ohne
-        # Verzeichnisanteil (Bare-Metal-Default, relativ zum aktuellen
-        # Arbeitsverzeichnis) einen leeren String zurück - os.makedirs("")
-        # würde damit crashen, ist hier aber ohnehin unnötig (das aktuelle
-        # Arbeitsverzeichnis existiert bereits).
+        # Zielverzeichnis automatisch anlegen, falls es noch nicht existiert
+        # (z.B. /etc/yt-upload, falls nur das yt-upload-CLI-Paket ohne den
+        # Dämon installiert ist). os.path.dirname() liefert nur bei einem
+        # explizit per ENV auf einen reinen Dateinamen ohne Verzeichnisanteil
+        # gesetzten CREDENTIALS_FILE einen leeren String zurück -
+        # os.makedirs("") würde damit crashen, ist dann aber ohnehin unnötig
+        # (das aktuelle Arbeitsverzeichnis existiert bereits).
         target_dir = os.path.dirname(OUTPUT_CREDENTIALS_FILE)
         if target_dir:
             os.makedirs(target_dir, exist_ok=True)
@@ -240,6 +260,8 @@ def main():
         fd = os.open(OUTPUT_CREDENTIALS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(legacy_credentials, f, indent=2)
+
+        _chown_to_service_user(OUTPUT_CREDENTIALS_FILE, "yt-upload")
 
         print(f"\n[ERFOLG] {OUTPUT_CREDENTIALS_FILE} wurde erfolgreich erstellt!")
 
