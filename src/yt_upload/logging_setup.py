@@ -35,6 +35,10 @@ def setup_logging():
     """
     Initialisiert das Root-Logging:
     - stdout-Handler: immer aktiv, wird von journald/docker logs erfasst.
+      Bewusst OHNE eigenen Zeitstempel im Format - journald/docker logs
+      stempeln jede Zeile ohnehin schon selbst, ein zusätzlicher
+      %(asctime)s im Log-Text würde in `journalctl`/`docker logs` nur
+      doppelt auftauchen.
     - Datei-Handler: zusätzlich, ausgelöst durch (a) explizite LOG_FILE-
       Konfiguration (Config oder ENV), (b) ein tatsächlich als Docker-Volume
       gemountetes /log-Verzeichnis (siehe config._is_dedicated_mount() - eine
@@ -53,7 +57,12 @@ def setup_logging():
       Rotationsmechanismen auf derselben Datei würden sich nur gegenseitig
       ins Gehege kommen.
     """
-    log_handlers = [logging.StreamHandler(sys.stdout)]
+    stdout_formatter = logging.Formatter("[%(levelname)s] %(message)s")
+    file_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(stdout_formatter)
+    log_handlers = [stdout_handler]
     docker_log_volume_mounted = config._is_dedicated_mount("/log")
     syslog_detected = is_syslog_daemon_running()
     file_log_error = None
@@ -79,13 +88,13 @@ def setup_logging():
                 file_handler = RotatingFileHandler(config.LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
             else:
                 file_handler = logging.FileHandler(config.LOG_FILE, encoding="utf-8")
+            file_handler.setFormatter(file_formatter)
             log_handlers.append(file_handler)
         except OSError as e:
             file_log_error = str(e)
 
     logging.basicConfig(
         level=logging.DEBUG if config.DEBUG_MODE else logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=log_handlers
     )
 
