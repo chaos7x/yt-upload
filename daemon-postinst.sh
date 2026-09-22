@@ -21,9 +21,20 @@ if ! getent group media-pipeline >/dev/null 2>&1; then
 fi
 adduser yt-upload media-pipeline
 
-mkdir -p /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry
-chown root:media-pipeline /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry
-chmod 2775 /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry
+# Rechte/Owner NUR beim allerersten Anlegen setzen, nie bei einem Upgrade
+# ueberschreiben - ein Admin, der z.B. chmod 777 auf /srv/media-pipeline/incoming
+# gesetzt hat (etwa fuer einen externen Uploader ausserhalb der media-pipeline-
+# Gruppe), wuerde sonst bei jedem apt upgrade stillschweigend wieder auf 2775
+# zurueckgesetzt. Reihenfolge wichtig: Elternverzeichnis zuerst, sonst wuerde
+# ein spaeteres mkdir -p fuer ein Kindverzeichnis das noch fehlende Eltern-
+# verzeichnis mit falschen (umask-basierten) Rechten anlegen.
+for dir in /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry; do
+    if [ ! -d "$dir" ]; then
+        mkdir -p "$dir"
+        chown root:media-pipeline "$dir"
+        chmod 2775 "$dir"
+    fi
+done
 
 # /var/log gehoert root:root mit 755 - ohne dies koennte der dedizierte
 # yt-upload-User dort nie einen eigenen Unterordner anlegen, und
