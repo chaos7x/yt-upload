@@ -47,3 +47,29 @@ class TestLoadConfigurationParsingErrors:
         config.load_configuration()
 
         assert config.DEFAULT_CATEGORY == "Gaming"
+
+    def test_broken_conf_d_file_does_not_block_later_conf_d_files(self, config, tmp_path, monkeypatch):
+        """
+        Regression: config.read() mit der GESAMTEN Dateiliste auf einmal
+        bricht beim ersten Parse-Fehler komplett ab - jede danach folgende
+        Datei (auch gültige!) wurde dadurch stillschweigend nie gelesen.
+        Alphabetisch sortiert landet die kaputte Datei zwischen zwei gültigen.
+        """
+        conf_path = _write_config(tmp_path, "[settings]\ndefault_category = FromMain\n")
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "10-good.conf").write_text("[settings]\ndefault_tags = good-tag\n", encoding="utf-8")
+        (conf_d / "20-broken.conf").write_text("[settings]\ndefault_category\n", encoding="utf-8")
+        (conf_d / "30-more.conf").write_text("[settings]\ndefault_language = fr\n", encoding="utf-8")
+
+        monkeypatch.setattr(config, "CONF_PATH", conf_path)
+        monkeypatch.setattr(config, "CONF_D_DIR", str(conf_d))
+        monkeypatch.delenv("DEFAULT_CATEGORY", raising=False)
+        monkeypatch.delenv("DEFAULT_TAGS", raising=False)
+        monkeypatch.delenv("VIDEO_LANGUAGE", raising=False)
+
+        config.load_configuration()
+
+        assert config.DEFAULT_CATEGORY == "FromMain"
+        assert config.DEFAULT_TAGS == "good-tag"
+        assert config.VIDEO_LANGUAGE == "fr"

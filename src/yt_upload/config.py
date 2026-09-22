@@ -219,17 +219,25 @@ def load_configuration(log_changes=False):
     CURRENT_CONFIG_HASH = new_hash
 
     # --- Step 1: Config-Dateien verarbeiten ---
+    # Bewusst einzeln statt config.read(config_files, ...) mit der ganzen
+    # Liste auf einmal: ConfigParser.read() bricht beim ersten Parse-Fehler
+    # in der Liste komplett ab, wodurch jede DANACH folgende Datei (auch eine
+    # gültige!) stillschweigend gar nicht mehr gelesen wird - ein Tippfehler
+    # in einer frühen conf.d-Datei würde sonst alle alphabetisch späteren
+    # unsichtbar deaktivieren, ohne dass das aus der Warnung ersichtlich wäre.
     if config_files:
-        try:
-            config.read(config_files, encoding='utf-8')
-        except (OSError, configparser.Error, UnicodeDecodeError) as e:
-            # Fail-fast statt eines uncaught ParsingError, der den ganzen
-            # Dämon abstürzen ließe (z.B. bei einer Zeile ohne "=", einem
-            # doppelten Abschnitt oder einer kaputten Zeichenkodierung) -
-            # die untenstehenden config.get(fallback=...)-Aufrufe bleiben
-            # dann einfach bei ihren aktuellen Werten (Alt-Config bzw.
-            # Hardcoded-Defaults beim allerersten Laden).
-            logger.warning(f"Fehler beim Lesen der Config-Dateien: {e}")
+        for cfg_file in config_files:
+            try:
+                config.read(cfg_file, encoding='utf-8')
+            except (OSError, configparser.Error, UnicodeDecodeError) as e:
+                # Fail-fast statt eines uncaught ParsingError, der den ganzen
+                # Dämon abstürzen ließe (z.B. bei einer Zeile ohne "=", einem
+                # doppelten Abschnitt oder einer kaputten Zeichenkodierung) -
+                # die untenstehenden config.get(fallback=...)-Aufrufe bleiben
+                # dann einfach bei ihren aktuellen Werten (Alt-Config bzw.
+                # Hardcoded-Defaults beim allerersten Laden), nur diese eine
+                # Datei wird übersprungen.
+                logger.warning(f"Fehler beim Lesen von {cfg_file}: {e}")
 
         # Sektion [paths] einlesen
         if 'paths' in config:
