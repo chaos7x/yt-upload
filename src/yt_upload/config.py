@@ -74,6 +74,26 @@ RETRY_DIR = os.environ.get('RETRY_DIR', "/srv/media-pipeline/retry")
 DEBUG_MODE = os.environ.get('DEBUG', '').lower() in ('true', 'yes', '1')
 os.environ['DEBUG'] = '1' if DEBUG_MODE else '0'
 
+_VALID_LOG_LEVELS = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
+
+
+def _resolve_log_level_name(debug_mode: bool) -> str:
+    """
+    Ermittelt den LOG_LEVEL-Namen nach Priorität:
+    1. LOG_LEVEL (DEBUG/INFO/WARNING/ERROR/CRITICAL, case-insensitive) - die
+       flexible Variante, einheitlich mit tw-recorder/fetchbridge.
+    2. debug_mode (aus DEBUG=true/yes/1) - reine Kurzform für
+       LOG_LEVEL=DEBUG, nur als Default falls LOG_LEVEL NICHT gesetzt ist.
+    3. Fallback INFO, auch bei einem ungültigen LOG_LEVEL-Wert (kein
+       AttributeError wegen eines Tippfehlers in der ENV).
+    """
+    default_name = 'DEBUG' if debug_mode else 'INFO'
+    name = os.environ.get('LOG_LEVEL', '').strip().upper() or default_name
+    return name if name in _VALID_LOG_LEVELS else default_name
+
+
+LOG_LEVEL_NAME = _resolve_log_level_name(DEBUG_MODE)
+
 
 def _default_log_file():
     """

@@ -1,10 +1,38 @@
-"""Tests für load_configuration() (config.py) - Config-Datei-Parsing-Robustheit."""
+"""Tests für load_configuration() und _resolve_log_level_name() (config.py)."""
 
 
 def _write_config(tmp_path, content):
     path = tmp_path / "upload.conf"
     path.write_text(content, encoding="utf-8")
     return str(path)
+
+
+class TestResolveLogLevelName:
+    def test_defaults_to_info_when_not_debug(self, config, monkeypatch):
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
+
+        assert config._resolve_log_level_name(debug_mode=False) == "INFO"
+
+    def test_debug_mode_true_maps_to_debug(self, config, monkeypatch):
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
+
+        assert config._resolve_log_level_name(debug_mode=True) == "DEBUG"
+
+    def test_log_level_env_var_is_used(self, config, monkeypatch):
+        monkeypatch.setenv("LOG_LEVEL", "warning")
+
+        assert config._resolve_log_level_name(debug_mode=False) == "WARNING"
+
+    def test_explicit_log_level_takes_precedence_over_debug_mode(self, config, monkeypatch):
+        monkeypatch.setenv("LOG_LEVEL", "ERROR")
+
+        assert config._resolve_log_level_name(debug_mode=True) == "ERROR"
+
+    def test_invalid_log_level_falls_back_to_default(self, config, monkeypatch):
+        monkeypatch.setenv("LOG_LEVEL", "not-a-real-level")
+
+        assert config._resolve_log_level_name(debug_mode=False) == "INFO"
+        assert config._resolve_log_level_name(debug_mode=True) == "DEBUG"
 
 
 class TestLoadConfigurationParsingErrors:

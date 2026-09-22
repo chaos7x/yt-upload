@@ -517,9 +517,12 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
   * **Standard:** `/app`
   * **Beschreibung:** Pfad für benutzerspezifische Konfigurationen/Caches (im Container meist `/tmp` für Read-Only-Support).
 
+* `LOG_LEVEL`
+  * **Standard:** `INFO`
+  * **Beschreibung:** `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` (case-insensitive), ein ungültiger Wert fällt sicher auf den Standard zurück. Hat immer Vorrang vor `DEBUG`.
 * `DEBUG`
   * **Standard:** `0`
-  * **Beschreibung:** Setze auf `true` oder `1`, um erweiterte Log-Ausgaben für Entwickler zu aktivieren.
+  * **Beschreibung:** Setze auf `true` oder `1`, um erweiterte Log-Ausgaben für Entwickler zu aktivieren - abwärtskompatible Kurzform für `LOG_LEVEL=DEBUG`, nur wirksam falls `LOG_LEVEL` nicht gesetzt ist.
 
 Sämtliche Pfade aus dem `[paths]`-Abschnitt der `upload.conf` (siehe oben) lassen sich zusätzlich per gleichnamiger, großgeschriebener Umgebungsvariable überschreiben (z. B. `RETRY_DIR`, `LOG_FILE`, `CREDENTIALS_FILE`) - Umgebungsvariablen haben dabei immer Vorrang vor der Konfigurationsdatei.
 
