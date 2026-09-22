@@ -25,6 +25,14 @@ mkdir -p /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-
 chown root:media-pipeline /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry
 chmod 2775 /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry
 
+# /var/log gehoert root:root mit 755 - ohne dies koennte der dedizierte
+# yt-upload-User dort nie einen eigenen Unterordner anlegen, und
+# config._default_log_file()s FHS-Fallback (/var/log/yt-upload/...) wuerde
+# auf jeder frischen Installation stillschweigend nie greifen (faellt sonst
+# auf BASE_DIR zurueck, das als Paketverzeichnis ebenfalls nicht beschreibbar ist).
+mkdir -p /var/log/yt-upload
+chown yt-upload:yt-upload /var/log/yt-upload
+
 # /run/systemd/system existiert nur, wenn systemd tatsaechlich als Init-System
 # laeuft (nicht z.B. in einem Chroot/Container-Build ohne systemd) - ohne
 # diese Absicherung wuerde die Paketinstallation dort fehlschlagen. Auf einem

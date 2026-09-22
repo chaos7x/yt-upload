@@ -182,7 +182,8 @@ class TestSetupLoggingFileTrigger:
         assert len(captured["handlers"]) == 1
         assert isinstance(captured["handlers"][0], logging_setup.logging.StreamHandler)
 
-    def test_real_log_volume_mount_adds_file_handler(self, logging_setup, config, monkeypatch, tmp_path):
+    def test_real_log_volume_mount_adds_rotating_file_handler(self, logging_setup, config, monkeypatch, tmp_path):
+        """Docker-Volume: niemand sonst rotiert die Datei -> eigene RotatingFileHandler-Rotation noetig."""
         monkeypatch.setattr(config, "_is_dedicated_mount", lambda p: True)
         monkeypatch.setattr(config, "LOG_FILE_EXPLICIT", False)
         monkeypatch.setattr(config, "LOG_FILE", str(tmp_path / "upload.log"))
@@ -192,8 +193,10 @@ class TestSetupLoggingFileTrigger:
         logging_setup.setup_logging()
 
         assert len(captured["handlers"]) == 2
+        assert isinstance(captured["handlers"][1], logging_setup.RotatingFileHandler)
 
-    def test_explicit_log_file_config_adds_file_handler_even_without_mount(self, logging_setup, config, monkeypatch, tmp_path):
+    def test_explicit_log_file_config_adds_rotating_file_handler_even_without_mount(self, logging_setup, config, monkeypatch, tmp_path):
+        """Frei gewaehlter Pfad: ebenfalls niemand sonst rotiert -> eigene Rotation."""
         monkeypatch.setattr(config, "_is_dedicated_mount", lambda p: False)
         monkeypatch.setattr(config, "LOG_FILE_EXPLICIT", True)
         monkeypatch.setattr(config, "LOG_FILE", str(tmp_path / "upload.log"))
@@ -203,3 +206,44 @@ class TestSetupLoggingFileTrigger:
         logging_setup.setup_logging()
 
         assert len(captured["handlers"]) == 2
+        assert isinstance(captured["handlers"][1], logging_setup.RotatingFileHandler)
+
+    def test_syslog_daemon_detected_adds_plain_file_handler_without_own_rotation(self, logging_setup, config, monkeypatch, tmp_path):
+        """
+        Ein laufender Syslog-Daemon impliziert praktisch immer auch logrotate
+        (siehe logrotate.d/yt-upload) - die App soll dort NICHT zusaetzlich
+        selbst per RotatingFileHandler rotieren, sonst kommen sich beide
+        Mechanismen in die Quere.
+        """
+        monkeypatch.setattr(config, "_is_dedicated_mount", lambda p: False)
+        monkeypatch.setattr(config, "LOG_FILE_EXPLICIT", False)
+        monkeypatch.setattr(config, "LOG_FILE", str(tmp_path / "upload.log"))
+        monkeypatch.setattr(logging_setup, "is_syslog_daemon_running", lambda: True)
+        captured = self._capture_handlers(logging_setup, monkeypatch)
+
+        logging_setup.setup_logging()
+
+        assert len(captured["handlers"]) == 2
+        file_handler = captured["handlers"][1]
+        assert isinstance(file_handler, logging_setup.logging.FileHandler)
+        assert not isinstance(file_handler, logging_setup.RotatingFileHandler)
+
+    def test_file_handler_creation_failure_falls_back_to_stdout_only(self, logging_setup, config, monkeypatch, tmp_path, caplog):
+        """Weder RotatingFileHandler noch FileHandler duerfen bei einem Schreibfehler den Prozess abschiessen."""
+        monkeypatch.setattr(config, "_is_dedicated_mount", lambda p: False)
+        monkeypatch.setattr(config, "LOG_FILE_EXPLICIT", True)
+        monkeypatch.setattr(config, "LOG_FILE", str(tmp_path / "unwritable-dir" / "upload.log"))
+        monkeypatch.setattr(logging_setup, "is_syslog_daemon_running", lambda: False)
+
+        def raise_permission_error(*a, **k):
+            raise PermissionError("Permission denied")
+
+        monkeypatch.setattr(logging_setup, "RotatingFileHandler", raise_permission_error)
+        captured = self._capture_handlers(logging_setup, monkeypatch)
+
+        with caplog.at_level("WARNING"):
+            logging_setup.setup_logging()
+
+        assert len(captured["handlers"]) == 1
+        assert isinstance(captured["handlers"][0], logging_setup.logging.StreamHandler)
+        assert any("nicht beschreibbar" in r.message for r in caplog.records)

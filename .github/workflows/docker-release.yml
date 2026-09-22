@@ -172,13 +172,17 @@ jobs:
           # installierter Entry-Point statt als bare-copy-Skript - für ein
           # .deb, das ohnehin das ganze Package installiert, unnötig, das
           # nachzubilden.
-          mkdir -p pkgroot-cli/usr/bin pkgroot-cli/usr/lib/python3/dist-packages pkgroot-cli/etc/yt-upload/conf.d
+          mkdir -p pkgroot-cli/usr/bin pkgroot-cli/usr/lib/python3/dist-packages pkgroot-cli/etc/yt-upload/conf.d pkgroot-cli/etc/logrotate.d
           cp install/bin/yt-upload install/bin/get-token pkgroot-cli/usr/bin/
           chmod 755 pkgroot-cli/usr/bin/yt-upload pkgroot-cli/usr/bin/get-token
           cp -r install/yt_upload pkgroot-cli/usr/lib/python3/dist-packages/yt_upload
           cp -r install/get_token pkgroot-cli/usr/lib/python3/dist-packages/get_token
           cp -r install/yt_upload-*.dist-info pkgroot-cli/usr/lib/python3/dist-packages/
           cp upload.conf.example pkgroot-cli/etc/yt-upload/upload.conf
+          # Nur relevant, wenn ein klassischer Syslog-Daemon laeuft (siehe
+          # logging_setup.setup_logging()) - der Datei-Handler rotiert dann
+          # bewusst selbst NICHT mehr, das uebernimmt logrotate.
+          cp logrotate.d/yt-upload pkgroot-cli/etc/logrotate.d/yt-upload
 
           mkdir -p pkgroot-daemon/usr/lib/systemd/system pkgroot-daemon/etc/init.d pkgroot-daemon/etc/cron.d
           cp yt-upload.service pkgroot-daemon/usr/lib/systemd/system/yt-upload.service
@@ -209,6 +213,7 @@ jobs:
             --depends python3-requests \
             --depends ffmpeg \
             --config-files /etc/yt-upload/upload.conf \
+            --config-files /etc/logrotate.d/yt-upload \
             -C pkgroot-cli \
             usr etc
 

@@ -35,7 +35,7 @@ def setup_logging():
     """
     Initialisiert das Root-Logging:
     - stdout-Handler: immer aktiv, wird von journald/docker logs erfasst.
-    - RotatingFileHandler: zusätzlich, ausgelöst durch (a) explizite LOG_FILE-
+    - Datei-Handler: zusätzlich, ausgelöst durch (a) explizite LOG_FILE-
       Konfiguration (Config oder ENV), (b) ein tatsächlich als Docker-Volume
       gemountetes /log-Verzeichnis (siehe config._is_dedicated_mount() - eine
       reine Existenzprüfung reicht nicht, da das Dockerfile /log auch ganz
@@ -43,6 +43,15 @@ def setup_logging():
       klassischen Syslog-Daemon (rsyslog, syslog-ng, syslogd) auf
       Bare-Metal-/systemd-Systemen. Ohne einen dieser Gründe ist die eigene
       Logdatei nur eine unnötige zweite Datenhaltung neben dem Journal.
+
+      Nur in den Fällen (a)/(b) ein RotatingFileHandler mit eigener
+      größenbasierter Rotation - dort rotiert sonst niemand (Docker-Volume,
+      frei gewählter Pfad). Bei (c) dagegen ein einfacher FileHandler ohne
+      eigene Rotation: ein System mit laufendem Syslog-Daemon hat so gut wie
+      immer auch logrotate zur Hand (Standard-Debian-Konvention, siehe
+      mitgeliefertes /etc/logrotate.d/yt-upload) - zwei unabhängige
+      Rotationsmechanismen auf derselben Datei würden sich nur gegenseitig
+      ins Gehege kommen.
     """
     log_handlers = [logging.StreamHandler(sys.stdout)]
     docker_log_volume_mounted = config._is_dedicated_mount("/log")
@@ -51,20 +60,26 @@ def setup_logging():
 
     if config.LOG_FILE_EXPLICIT:
         trigger_reason = "explizite LOG_FILE-Konfiguration"
+        self_rotate = True
     elif docker_log_volume_mounted:
         trigger_reason = "/log als Docker-Volume gemountet"
+        self_rotate = True
     elif syslog_detected:
         trigger_reason = "Syslog-Daemon erkannt"
+        self_rotate = False
     else:
         trigger_reason = None
+        self_rotate = False
 
     if trigger_reason is not None:
         try:
             log_dir = os.path.dirname(config.LOG_FILE) or '.'
             os.makedirs(log_dir, exist_ok=True)
-            log_handlers.append(
-                RotatingFileHandler(config.LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
-            )
+            if self_rotate:
+                file_handler = RotatingFileHandler(config.LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
+            else:
+                file_handler = logging.FileHandler(config.LOG_FILE, encoding="utf-8")
+            log_handlers.append(file_handler)
         except OSError as e:
             file_log_error = str(e)
 
