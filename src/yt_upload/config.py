@@ -228,7 +228,16 @@ def load_configuration(log_changes=False):
     if config_files:
         for cfg_file in config_files:
             try:
-                config.read(cfg_file, encoding='utf-8')
+                # config.read(cfg_file, ...) öffnet die Datei intern und
+                # FÄNGT einen dabei auftretenden OSError (z.B. Permission
+                # denied, falls eine conf.d-Datei versehentlich dem falschen
+                # User/einer falschen Gruppe gehört) STILL AB, ohne ihn je an
+                # aufrufenden Code durchzureichen - das except unten würde so
+                # einen Fall nie sehen, die Datei würde ohne jede Warnung
+                # einfach ignoriert. Mit dem eigenen open() landet ein
+                # Berechtigungsfehler dagegen in unserem eigenen except.
+                with open(cfg_file, encoding='utf-8') as fp:
+                    config.read_file(fp, source=cfg_file)
             except (OSError, configparser.Error, UnicodeDecodeError) as e:
                 # Fail-fast statt eines uncaught ParsingError, der den ganzen
                 # Dämon abstürzen ließe (z.B. bei einer Zeile ohne "=", einem

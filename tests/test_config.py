@@ -73,3 +73,41 @@ class TestLoadConfigurationParsingErrors:
         assert config.DEFAULT_CATEGORY == "FromMain"
         assert config.DEFAULT_TAGS == "good-tag"
         assert config.VIDEO_LANGUAGE == "fr"
+
+    def test_unreadable_conf_d_file_is_skipped_with_a_warning(self, config, tmp_path, monkeypatch, caplog):
+        """
+        Regression: config.read(f, ...) laesst configparser die Datei selbst
+        oeffnen - ein dabei auftretender OSError (z.B. Permission denied,
+        real reproduziert: eine conf.d-Datei gehoerte einem persoenlichen
+        User statt der erwarteten Gruppe) wird von ConfigParser.read()
+        INTERN abgefangen und NIE an aufrufenden Code durchgereicht. Die
+        Datei wurde dadurch komplett kommentarlos ignoriert, ohne jede
+        Log-Warnung. Fix: die Datei selbst oeffnen (config.read_file()),
+        damit ein Berechtigungsfehler in unser eigenes except laeuft.
+        """
+        conf_path = _write_config(tmp_path, "[settings]\ndefault_category = FromMain\n")
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        unreadable = conf_d / "secret.conf"
+        unreadable.write_text("[settings]\ndefault_tags = secret-tag\n", encoding="utf-8")
+
+        monkeypatch.setattr(config, "CONF_PATH", conf_path)
+        monkeypatch.setattr(config, "CONF_D_DIR", str(conf_d))
+        monkeypatch.delenv("DEFAULT_CATEGORY", raising=False)
+        monkeypatch.delenv("DEFAULT_TAGS", raising=False)
+
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == str(unreadable):
+                raise PermissionError(13, "Permission denied", str(unreadable))
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(config, "open", fake_open, raising=False)
+
+        with caplog.at_level("WARNING"):
+            config.load_configuration()
+
+        assert config.DEFAULT_CATEGORY == "FromMain"
+        assert config.DEFAULT_TAGS != "secret-tag"
+        assert "secret.conf" in caplog.text
