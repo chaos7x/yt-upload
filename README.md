@@ -110,6 +110,11 @@ services:
       # einzigen Bind-Mount direkt auf /srv/media-pipeline - trifft damit
       # exakt den Code-Default, keine ENV-Umbiegung nötig. "incoming" ist
       # der einzige Unterordner davon, in den auch fetchbridge hineinschreibt.
+      # Zeigt auf denselben gemeinsamen /opt/docker/media-pipeline-Host-Baum
+      # wie tw-recorders und fetchbridges Compose-Dateien: fetchbridge
+      # braucht recordings/ UND incoming/ als EINEN gemeinsamen Mount, sonst
+      # scheitert dessen os.rename() zwischen beiden mit EXDEV (siehe
+      # fetchbridges docker-compose.yaml.example).
       - yt-upload-data:/srv/media-pipeline
       - log:/log
       # Optional: eigene upload.conf statt der im Image mitgelieferten
@@ -132,7 +137,7 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: "./yt-upload-data"
+      device: "/opt/docker/media-pipeline"
 
   log:
     driver: local

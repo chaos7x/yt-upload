@@ -31,6 +31,11 @@ services:
       # nötig. "incoming" ist der einzige Unterordner davon, in den auch
       # fetchbridge hineinschreibt (siehe dessen docker-compose.yaml.example);
       # die Unterordner selbst legt yt-upload beim ersten Start automatisch an.
+      # Zeigt auf denselben gemeinsamen /opt/docker/media-pipeline-Host-Baum
+      # wie tw-recorders "recordings" und fetchbridges Mount - fetchbridge
+      # braucht recordings/ UND incoming/ dafür als EINEN gemeinsamen Mount
+      # (statt zwei getrennte), sonst scheitert dessen os.rename() zwischen
+      # den beiden mit EXDEV (siehe fetchbridges docker-compose.yaml.example).
       - yt-upload-data:/srv/media-pipeline
 
       # 4. Log Verzeichnis
@@ -77,7 +82,7 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: "./yt-upload-data"
+      device: "/opt/docker/media-pipeline"
 
   log:
     driver: local
