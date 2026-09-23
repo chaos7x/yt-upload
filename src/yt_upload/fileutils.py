@@ -21,10 +21,28 @@ logger = logging.getLogger(__name__)
 
 
 def ensure_directories():
-    """Stellt sicher, dass alle notwendigen Zielverzeichnisse auf dem Dateisystem existieren."""
+    """
+    Stellt sicher, dass alle notwendigen Zielverzeichnisse auf dem
+    Dateisystem existieren - mit explizit 2775 statt sich auf
+    os.makedirs()s Standard-Mode zu verlassen: der wird vom Prozess-Umask
+    maskiert (Standard-Mode 0o777 z.B. auf 0o755 bei umask 022). Das
+    Setgid-Bit selbst wird zwar vom Elternverzeichnis /srv/media-pipeline
+    geerbt, das für die media-pipeline-Gruppe eigentlich nötige g+w aber
+    nicht - ohne das könnten tw-recorder/fetchbridge (Gruppenmitglieder,
+    aber nicht Owner) hier keine Dateien mehr ablegen/verschieben (real auf
+    einem tw-recorder-Host gefunden: Kanal-Unterordner standen auf 2755
+    statt 2775). Nur beim tatsächlichen Neuanlegen gesetzt, sonst würde
+    eine bewusste Admin-Anpassung überschrieben.
+    """
     for d in [config.IN_DIR, config.WORK_DIR, config.DONE_DIR, config.CORRUPT_DIR, config.RETRY_DIR]:
         try:
+            newly_created = not os.path.isdir(d)
             os.makedirs(d, exist_ok=True)
+            if newly_created:
+                try:
+                    os.chmod(d, 0o2775)
+                except OSError as e:
+                    logger.warning(f"Konnte Rechte von {d} nicht auf 2775 setzen: {e}")
         except (PermissionError, OSError) as e:
             sys.stderr.write(f"Warnung: Kann Verzeichnis {d} nicht anlegen ({e}).\n")
 
