@@ -338,6 +338,8 @@ shred -u /etc/yt-upload/youtube-upload-credentials.json
 
 `get-token` selbst bleibt davon unberührt - es muss weiterhin einmalig interaktiv laufen und die Klartext-Datei erst erzeugen, bevor sie in Schritt 1 verschlüsselt wird.
 
+**Hinweis zu den Dateirechten:** Die von systemd nach `$CREDENTIALS_DIRECTORY` gelieferte, entschlüsselte Kopie zeigt bei systemd >= 254.3 bewusst `0440` (`-r--r-----+`) statt `0600` - der eigentliche Zugriffsschutz läuft dort über eine ACL (`user:<dienst-user>:r--`), nicht über die klassischen Mode-Bits (siehe [systemd/systemd#29435](https://github.com/systemd/systemd/issues/29435)). `yt-upload` erkennt das anhand von `$CREDENTIALS_DIRECTORY` und überspringt für solche Pfade den sonst üblichen "Datei zu offen berechtigt"-Check samt automatischer `chmod 600`-Korrektur - Letztere würde auf dem read-only tmpfs ohnehin nur mit `EROFS` fehlschlagen und unnötig eine Warnung ins Log schreiben.
+
 ---
 
 ## 🐳 Docker-Image-Varianten

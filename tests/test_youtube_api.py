@@ -132,6 +132,63 @@ class TestGetAccessToken:
         assert os.stat(cred_file).st_mode & 0o777 == 0o600
 
 
+class TestIsSystemdCredential:
+    """
+    Seit systemd >= 254.3 zeigen von LoadCredential=/LoadCredentialEncrypted=
+    gelieferte Dateien in $CREDENTIALS_DIRECTORY bewusst 0440 (ACL-basiert
+    abgesichert, siehe _is_systemd_credential()-Docstring und
+    https://github.com/systemd/systemd/issues/29435) statt 0600 - ein reiner
+    st_mode-Check würde das fälschlich als "zu offen" werten.
+    """
+
+    def test_false_if_credentials_directory_env_not_set(self, youtube_api, monkeypatch):
+        monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+        assert youtube_api._is_systemd_credential("/run/credentials/yt-upload.service/youtube-credentials") is False
+
+    def test_true_for_path_inside_credentials_directory(self, youtube_api, monkeypatch):
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", "/run/credentials/yt-upload.service")
+        assert youtube_api._is_systemd_credential("/run/credentials/yt-upload.service/youtube-credentials") is True
+
+    def test_false_for_unrelated_path_outside_credentials_directory(self, youtube_api, monkeypatch):
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", "/run/credentials/yt-upload.service")
+        assert youtube_api._is_systemd_credential("/etc/yt-upload/youtube-upload-credentials.json") is False
+
+    def test_false_for_sibling_directory_with_shared_prefix(self, youtube_api, monkeypatch):
+        """/run/credentials/yt-upload.service2 darf nicht als Präfix-Treffer durchgehen."""
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", "/run/credentials/yt-upload.service")
+        assert youtube_api._is_systemd_credential("/run/credentials/yt-upload.service2/other") is False
+
+
+class TestGetAccessTokenSystemdCredential:
+    def test_skips_permission_check_for_systemd_credential(self, youtube_api, monkeypatch, tmp_path, caplog):
+        cred_dir = tmp_path / "yt-upload.service"
+        cred_dir.mkdir()
+        cred_file = cred_dir / "youtube-credentials"
+        # 0440 ist der von systemd (ACL-basiert) tatsächlich gelieferte Wert.
+        _write_credentials(cred_file, {"client_id": "cid", "client_secret": "csecret", "refresh_token": "rtok"}, mode=0o440)
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
+        monkeypatch.setattr(youtube_api.requests, "post", lambda *a, **k: FakeResponse(200, json_data={"access_token": "AT"}))
+
+        with caplog.at_level("WARNING"):
+            token = youtube_api.get_access_token(cred_file=str(cred_file))
+
+        assert token == "AT"
+        assert "zu offen berechtigt" not in caplog.text
+        # Mode bleibt unangetastet (0440, nicht auf 600 "korrigiert")
+        assert os.stat(cred_file).st_mode & 0o777 == 0o440
+
+    def test_still_checks_permissions_outside_credentials_directory(self, youtube_api, monkeypatch, tmp_path):
+        """CREDENTIALS_DIRECTORY gesetzt, aber die Datei liegt woanders - normaler Check greift weiterhin."""
+        cred_file = tmp_path / "creds.json"
+        _write_credentials(cred_file, {"client_id": "cid", "client_secret": "csecret", "refresh_token": "rtok"}, mode=0o644)
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", "/run/credentials/yt-upload.service")
+        monkeypatch.setattr(youtube_api.requests, "post", lambda *a, **k: FakeResponse(200, json_data={"access_token": "AT"}))
+
+        youtube_api.get_access_token(cred_file=str(cred_file))
+
+        assert os.stat(cred_file).st_mode & 0o777 == 0o600
+
+
 def _forbidden_get(*args, **kwargs):
     raise AssertionError("requests.get sollte nicht aufgerufen werden")
 

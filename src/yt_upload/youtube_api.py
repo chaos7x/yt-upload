@@ -26,6 +26,27 @@ from yt_upload.text_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _is_systemd_credential(path: str) -> bool:
+    """
+    Erkennt, ob path innerhalb des von systemd verwalteten $CREDENTIALS_DIRECTORY
+    liegt (LoadCredential=/LoadCredentialEncrypted=, siehe README). Seit systemd
+    >= 254.3 werden solche Dateien nicht mehr per klassischem chmod abgesichert,
+    sondern per ACL: Owner ist meist root, ein zusätzlicher ACL-Eintrag
+    ("user:<dienst-user>:r--") gewährt exklusiv dem Dienst-User Lesezugriff -
+    st_mode zeigt dabei bewusst 0440 ("-r--r-----+", das "+" markiert die ACL),
+    obwohl kein anderer User tatsächlich lesen kann (siehe
+    https://github.com/systemd/systemd/issues/29435). Ein reiner st_mode-Check
+    würde 0440 fälschlich als "zu offen" werten. Das CREDENTIALS_DIRECTORY selbst
+    ist außerdem ein read-only tmpfs, nur in der Mount-Namespace dieses einen
+    Diensts sichtbar - ein chmod-Versuch schlägt dort ohnehin mit EROFS fehl.
+    """
+    credentials_dir = os.environ.get('CREDENTIALS_DIRECTORY')
+    if not credentials_dir:
+        return False
+    normalized_dir = os.path.abspath(credentials_dir).rstrip(os.sep) + os.sep
+    return os.path.abspath(path).startswith(normalized_dir)
+
+
 def get_access_token(cred_file=None, client_secrets_file=None):
     """
     Generiert mittels Refresh-Token einen frischen OAuth2 Access Token bei Google.
@@ -36,17 +57,22 @@ def get_access_token(cred_file=None, client_secrets_file=None):
         raise FileNotFoundError(f"Credentials-Datei nicht gefunden: {target_cred}")
 
     # Sicherheits-Check: Datei enthält Client-Secret & Refresh-Token im Klartext,
-    # daher sollte sie nicht für Gruppe/Andere lesbar sein.
-    try:
-        current_mode = os.stat(target_cred).st_mode
-        if current_mode & 0o077:
-            try:
-                os.chmod(target_cred, 0o600)
-                logger.warning(f"Credentials-Datei {target_cred} war zu offen berechtigt, auf 600 korrigiert.")
-            except OSError as chmod_err:
-                logger.warning(f"Credentials-Datei {target_cred} ist zu offen berechtigt und konnte nicht korrigiert werden: {chmod_err}")
-    except OSError:
-        pass
+    # daher sollte sie nicht für Gruppe/Andere lesbar sein. Übersprungen für von
+    # systemd verwaltete Credentials (siehe _is_systemd_credential()) - dort ist
+    # der Zugriff bereits per ACL abgesichert, ein chmod wäre dort sowohl
+    # unwirksam (read-only tmpfs) als auch fachlich falsch (0440 ist der von
+    # systemd selbst gesetzte, korrekte Wert).
+    if not _is_systemd_credential(target_cred):
+        try:
+            current_mode = os.stat(target_cred).st_mode
+            if current_mode & 0o077:
+                try:
+                    os.chmod(target_cred, 0o600)
+                    logger.warning(f"Credentials-Datei {target_cred} war zu offen berechtigt, auf 600 korrigiert.")
+                except OSError as chmod_err:
+                    logger.warning(f"Credentials-Datei {target_cred} ist zu offen berechtigt und konnte nicht korrigiert werden: {chmod_err}")
+        except OSError:
+            pass
 
     with open(target_cred, encoding="utf-8") as f:
         data = json.load(f)
