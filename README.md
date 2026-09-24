@@ -306,9 +306,11 @@ sed -i 's/^#0 3/0 3/' /etc/cron.d/yt-upload-retry
 Am saubersten über ein Override-Snippet statt direkt in der von `.deb`/systemd verwalteten Unit-Datei (bleibt so update-sicher):
 
 ```bash
-# 1. Vorhandene Klartext-Datei verschlüsseln (einmalig, als root; --with-key=tpm2 bindet
-#    die .cred-Datei zusätzlich an dieses eine Gerät, sonst wird automatisch ein
-#    maschinen-eigener Schlüssel unter /var/lib/systemd/credential.secret verwendet)
+# 1. Vorhandene Klartext-Datei verschlüsseln (einmalig, als root; Standard ist
+#    --with-key=auto: bindet automatisch an einen vorhandenen TPM2-Chip
+#    zusätzlich zum maschinen-eigenen Schlüssel unter
+#    /var/lib/systemd/credential.secret - ganz ohne manuelle Angabe.
+#    --with-key=tpm2 erzwingt AUSSCHLIESSLICH TPM2, ohne den Host-Schlüssel)
 systemd-creds encrypt \
   --name=youtube-credentials \
   /etc/yt-upload/youtube-upload-credentials.json \
