@@ -3,6 +3,7 @@ YouTube Data API v3 Integration: OAuth-Token-Refresh, Resumable Upload (rohe
 REST-API, kein google-api-python-client) und Playlist-Zuweisung.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -392,6 +393,320 @@ def add_video_to_playlist(video_id, playlist_name, access_token, privacy=config.
     return False
 
 
+def _align_to_chunk_unit(uploaded_bytes, file_size):
+    """Rundet einen Zwischen-Offset auf die von YouTube geforderte 256-KiB-Grenze ab."""
+    if uploaded_bytes < file_size and uploaded_bytes % config.CHUNK_UNIT_BYTES != 0:
+        return (uploaded_bytes // config.CHUNK_UNIT_BYTES) * config.CHUNK_UNIT_BYTES
+    return uploaded_bytes
+
+
+def _clean_tags(tags):
+    """Säubert Tags (Liste oder Komma-String) und hält YouTubes Limits ein (je 100, gesamt 400 Zeichen)."""
+    if isinstance(tags, list):
+        tags_list = tags
+    elif isinstance(tags, str) and tags:
+        tags_list = [t.strip() for t in tags.split(",") if t.strip()]
+    else:
+        tags_list = []
+
+    final_tags = []
+    current_length = 0
+    for tag in tags_list:
+        sanitized_tag = sanitize_text(str(tag)).strip()
+        if not sanitized_tag or len(sanitized_tag) > 100:
+            continue
+        if current_length + len(sanitized_tag) + 1 <= 400:
+            final_tags.append(sanitized_tag)
+            current_length += len(sanitized_tag) + 1
+    return final_tags
+
+
+def _build_metadata(title, desc, category, tags, rec_date, location, privacy, publish_at,
+                    license_type, default_lang, default_audio_lang, embeddable):
+    """Baut den Metadaten-Body (snippet/status/recordingDetails) für die Session-Init."""
+    snippet = {
+        "title": title,
+        "description": desc or "",
+        "categoryId": str(get_valid_category_id(category) or "22"),
+    }
+
+    final_tags = _clean_tags(tags)
+    if final_tags:
+        snippet["tags"] = final_tags
+
+    if default_lang:
+        snippet["defaultLanguage"] = default_lang
+    if default_audio_lang:
+        snippet["defaultAudioLanguage"] = default_audio_lang
+
+    status = {
+        "privacyStatus": privacy,
+        "embeddable": embeddable,
+        "license": license_type,
+    }
+    if publish_at:
+        status["publishAt"] = publish_at
+
+    metadata_body = {
+        "snippet": snippet,
+        "status": status,
+    }
+
+    recording_details = {}
+    if rec_date:
+        recording_details["recordingDate"] = normalize_recording_date(rec_date)
+    parsed_loc = parse_location(location) if isinstance(location, str) else location
+    if parsed_loc:
+        recording_details["location"] = parsed_loc
+    if recording_details:
+        metadata_body["recordingDetails"] = recording_details
+
+    return metadata_body
+
+
+def _init_upload_session(session, metadata_body, file_size, access_token, cred_file, client_secrets_file):
+    """Initialisiert die Resumable-Upload-Session und gibt die Upload-URL zurück."""
+    parts = "snippet,status"
+    if "recordingDetails" in metadata_body:
+        parts += ",recordingDetails"
+
+    init_url = f"https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part={parts}"
+    init_headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Length": str(file_size),
+        "X-Upload-Content-Type": "video/*"
+    }
+
+    logger.info("Initialisiere Resumable Upload Session...")
+
+    init_max_retries = 3
+    for init_attempt in range(1, init_max_retries + 1):
+        try:
+            init_res = session.post(init_url, headers=init_headers, json=metadata_body, timeout=60)
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Netzwerkfehler bei Session-Init (Versuch {init_attempt}/{init_max_retries}): {e}")
+            if init_attempt < init_max_retries:
+                time.sleep(2 ** init_attempt)
+                continue
+            raise RuntimeError(f"Session-Init nach {init_max_retries} Versuchen fehlgeschlagen: {e}") from e
+
+        if init_res.status_code == 200:
+            upload_url = init_res.headers.get("Location")
+            if not upload_url:
+                raise RuntimeError("Keine Upload-Location im Header erhalten.")
+            return upload_url
+
+        is_last_attempt = init_attempt == init_max_retries
+
+        # Token abgelaufen: erneuern und erneut versuchen
+        if init_res.status_code == 401 and not is_last_attempt:
+            access_token = get_access_token(cred_file, client_secrets_file)
+            init_headers["Authorization"] = f"Bearer {access_token}"
+            continue
+
+        # 403 ist nicht automatisch ein abgelaufener Token - nur echte Rate-Limits rechtfertigen Retry.
+        if init_res.status_code == 403:
+            reason, message = _parse_api_error(init_res.text)
+            if reason in _RETRYABLE_403_REASONS and not is_last_attempt:
+                logger.warning(
+                    f"YouTube API meldet Rate-Limit ({reason}) bei Session-Init. "
+                    f"Retry {init_attempt}/{init_max_retries} in {2 ** init_attempt}s..."
+                )
+                time.sleep(2 ** init_attempt)
+                continue
+            error_cls = QuotaExceededError if reason in _QUOTA_403_REASONS else PermanentUploadError
+            raise error_cls(
+                f"Nicht behebbarer 403-Fehler bei Session-Init ({reason or 'unbekannt'}): {message or init_res.text[:500]}"
+            )
+
+        # Transiente Server-Fehler (inkl. 429 Rate-Limit): mit Backoff erneut versuchen
+        if init_res.status_code in (429, 500, 502, 503, 504) and not is_last_attempt:
+            logger.warning(
+                f"YouTube API meldet {init_res.status_code} bei Session-Init. "
+                f"Retry {init_attempt}/{init_max_retries} in {2 ** init_attempt}s..."
+            )
+            time.sleep(2 ** init_attempt)
+            continue
+
+        reason, message = _parse_api_error(init_res.text)
+        detail = f"{reason}: {message}" if reason else init_res.text[:500]
+        raise RuntimeError(f"Session-Init fehlgeschlagen ({init_res.status_code}): {detail}")
+
+
+def _evaluate_chunk_response(put_res, session, upload_url, access_token, file_size,
+                             chunk_len, uploaded_bytes, attempt, max_retries):
+    """
+    Wertet die Antwort auf einen Chunk-PUT aus. Gibt (video_id, uploaded_bytes)
+    zurück, wenn der Chunk angekommen ist (video_id ist nur bei abgeschlossenem
+    Upload gesetzt). Wirft RuntimeError als Retry-Signal und PermanentUploadError
+    (bzw. QuotaExceededError) bei nicht behebbaren Fehlern. 401 behandelt der Aufrufer.
+    """
+    # 200/201: Upload vollständig abgeschlossen
+    if put_res.status_code in (200, 201):
+        video_id = put_res.json().get("id")
+        logger.info(f"Upload ERFOLGREICH abgeschlossen! Video-ID: {video_id}")
+        return video_id, file_size
+
+    # 308: Chunk empfangen, Upload noch unvollständig
+    if put_res.status_code == 308:
+        range_hdr = put_res.headers.get("Range")
+        new_offset = uploaded_bytes + chunk_len
+        if range_hdr and "-" in range_hdr:
+            with contextlib.suppress(ValueError, IndexError):
+                new_offset = int(range_hdr.split("-")[1]) + 1
+
+        aligned = _align_to_chunk_unit(new_offset, file_size)
+        if aligned != new_offset:
+            logger.warning(f"Offset korrigiert auf 256-KiB-Grenze: {aligned} Bytes")
+
+        # Fortschritt IMMER auch als Log-Zeile ausgeben, nicht nur über den Live-Balken:
+        # Container mit `tty: true` melden isatty()=True auch im Daemon-Betrieb, der
+        # \r-Balken landet aber nie im Logger/in `docker logs`.
+        pct = (aligned / file_size) * 100
+        logger.info(f"Fortschritt: {aligned / (1024 * 1024):.1f} / {file_size / (1024 * 1024):.1f} MB ({pct:.1f}%)")
+        return None, aligned
+
+    # 403 ist nicht automatisch ein abgelaufener Token - nur echte Rate-Limits
+    # (Google-SDK-Konvention) rechtfertigen Retry.
+    if put_res.status_code == 403:
+        reason, message = _parse_api_error(put_res.text)
+        if reason in _RETRYABLE_403_REASONS:
+            raise RuntimeError(f"Rate-Limit ({reason}), versuche erneut...")
+        error_cls = QuotaExceededError if reason in _QUOTA_403_REASONS else PermanentUploadError
+        raise error_cls(
+            f"Nicht behebbarer 403-Fehler ({reason or 'unbekannt'}): {message or put_res.text[:500]}"
+        )
+
+    logger.error(
+        f"Unerwarteter Status {put_res.status_code} beim Chunk-Upload "
+        f"(Versuch {attempt}/{max_retries}): {put_res.text[:500]}"
+    )
+
+    # "Failed to parse Content-Range header": bekannter, gelegentlich transienter
+    # Ausrutscher der YouTube-API - tatsächlichen Serverstand abfragen und dort weitermachen.
+    if put_res.status_code == 400 and "Content-Range" in put_res.text:
+        try:
+            probe_video_id, probe_uploaded = _probe_upload_offset(
+                session, upload_url, access_token, file_size
+            )
+        except (requests.exceptions.RequestException, RuntimeError) as probe_err:
+            logger.warning(f"Status-Check nach Content-Range-Fehler fehlgeschlagen: {probe_err}")
+        else:
+            if probe_video_id:
+                logger.info(f"Upload war laut Status-Check bereits abgeschlossen! Video-ID: {probe_video_id}")
+                return probe_video_id, file_size
+
+            aligned = _align_to_chunk_unit(probe_uploaded, file_size)
+            logger.warning(
+                "Content-Range-Fehler war vermutlich transient - Serverstand laut "
+                f"Status-Check: {aligned / (1024 * 1024):.1f} MB. Setze fort..."
+            )
+            return None, aligned
+
+    # Dauerhafte Client-Fehler (z.B. 400 invalidVideoMetadata/uploadLimitExceeded,
+    # 404 Session weg) lassen sich durch Wiederholen nicht beheben.
+    if 400 <= put_res.status_code < 500 and put_res.status_code not in (401, 403, 408, 429):
+        reason, message = _parse_api_error(put_res.text)
+        detail = f"{reason}: {message}" if reason else put_res.text[:500]
+        error_cls = QuotaExceededError if reason in _QUOTA_400_REASONS else PermanentUploadError
+        raise error_cls(f"Nicht behebbarer Fehler ({put_res.status_code}): {detail}")
+    raise RuntimeError(f"Transienter Fehler ({put_res.status_code}), versuche erneut...")
+
+
+def _upload_chunks(session, upload_url, file_path, file_size, chunksize, access_token,
+                   cred_file, client_secrets_file):
+    """Überträgt die Datei chunkweise in die Upload-Session und gibt die Video-ID zurück."""
+    logger.info(f"Starte Chunk-Upload ({file_size / (1024 * 1024):.2f} MB) mit Chunksize {chunksize / (1024 * 1024):.1f} MB...")
+
+    max_retries = 5
+    video_id = None
+    uploaded_bytes = 0
+    progress_bar = _UploadProgressBar(file_size) if sys.stderr.isatty() else None
+
+    with open(file_path, "rb") as f:
+        while video_id is None and uploaded_bytes < file_size:
+            chunk_start = uploaded_bytes
+            f.seek(chunk_start)
+            chunk = f.read(chunksize)
+            chunk_len = len(chunk)
+            chunk_end = chunk_start + chunk_len - 1
+
+            chunk_headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Range": f"bytes {chunk_start}-{chunk_end}/{file_size}",
+                "Content-Type": "video/*"
+            }
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    put_res = session.put(upload_url, headers=chunk_headers, data=chunk, timeout=120)
+                    if put_res.status_code == 401:
+                        access_token = get_access_token(cred_file, client_secrets_file)
+                        chunk_headers["Authorization"] = f"Bearer {access_token}"
+                        raise RuntimeError("Token erneuert, versuche Chunk erneut...")
+                    video_id, uploaded_bytes = _evaluate_chunk_response(
+                        put_res, session, upload_url, access_token, file_size,
+                        chunk_len, uploaded_bytes, attempt, max_retries
+                    )
+                    break
+
+                except PermanentUploadError:
+                    raise  # nicht abfangen/retryen - direkt an den Aufrufer durchreichen
+
+                except Exception as e:  # noqa: BLE001 - fängt hier bewusst auch selbst geworfene RuntimeErrors als Retry-Signal ab, nicht nur echte Netzwerkfehler
+                    logger.warning(f"Fehler bei Chunk-Upload (Versuch {attempt}/{max_retries}): {e}")
+                    time.sleep(2 ** attempt)
+            else:
+                raise RuntimeError("Max Retries beim Upload überschritten.")
+
+            write_heartbeat()
+            if progress_bar:
+                if video_id:
+                    progress_bar.finish()
+                else:
+                    progress_bar.update(uploaded_bytes)
+
+    return video_id
+
+
+def _set_thumbnail(session, video_id, thumb_path, access_token, cred_file, client_secrets_file):
+    """Lädt ein benutzerdefiniertes Thumbnail hoch. Fehler werden nur geloggt (optionaler Schritt)."""
+    try:
+        logger.info(f"Lade benutzerdefiniertes Thumbnail hoch: {thumb_path}")
+        thumb_url = f"https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={video_id}"
+        with open(thumb_path, "rb") as tf:
+            thumb_bytes = tf.read()
+
+        for thumb_attempt in (1, 2):
+            t_res = session.post(
+                thumb_url,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "image/jpeg"
+                },
+                data=thumb_bytes,
+                timeout=60
+            )
+            if t_res.status_code in (200, 201):
+                logger.info("Thumbnail erfolgreich gesetzt.")
+                return
+            if t_res.status_code == 401 and thumb_attempt == 1:
+                logger.warning("Thumbnail-Upload: Token abgelaufen, erneuere und versuche erneut...")
+                access_token = get_access_token(cred_file, client_secrets_file)
+                continue
+            # 403 ist kein automatischer Token-Ablauf (z.B. "forbidden", wenn der Kanal
+            # nicht für Custom-Thumbnails freigeschaltet ist) - reason mitloggen.
+            reason, message = _parse_api_error(t_res.text)
+            detail = f"{reason}: {message}" if reason else t_res.text
+            logger.warning(f"Thumbnail-Upload fehlgeschlagen ({t_res.status_code}): {detail}")
+            return
+    # RuntimeError deckt hier auch RefreshTokenRevokedError/PermanentUploadError ab -
+    # Thumbnail ist optional, darf den bereits erfolgreichen Upload nicht kippen.
+    except (OSError, ValueError, KeyError, RuntimeError, requests.exceptions.RequestException) as te:
+        logger.warning(f"Fehler beim Thumbnail-Setzen: {te}")
+
+
 def upload_single_video(
     file_path,
     title,
@@ -417,11 +732,9 @@ def upload_single_video(
     Führt den eigentlichen Upload über die Resumable Upload HTTP REST API von YouTube durch.
     Überträgt Metadaten, Chunks, gesetzte Thumbnails und verknüpft Playlists.
     """
-    if title:
-        title = truncate_title(sanitize_text(title), max_length=100)
-    else:
-        base_name = os.path.splitext(os.path.basename(file_path))[0]
-        title = truncate_title(sanitize_text(base_name), max_length=100)
+    if not title:
+        title = os.path.splitext(os.path.basename(file_path))[0]
+    title = truncate_title(sanitize_text(title), max_length=100)
 
     if desc:
         desc = desc[:5000]
@@ -443,345 +756,33 @@ def upload_single_video(
         logger.info(f"Chunksize angepasst auf Vielfaches von 256 KiB: {chunksize} -> {adjusted_chunksize} Bytes")
         chunksize = adjusted_chunksize
 
-    # Säuberung und Kürzung der Tags
-    clean_tags = []
-    if isinstance(tags, list):
-        tags_list = tags
-    elif isinstance(tags, str) and tags:
-        tags_list = [t.strip() for t in tags.split(",") if t.strip()]
-    else:
-        tags_list = []
-
-    for tag in tags_list:
-        sanitized_tag = sanitize_text(str(tag)).strip()
-        if sanitized_tag and len(sanitized_tag) <= 100:
-            clean_tags.append(sanitized_tag)
-    
-    final_tags = []
-    current_length = 0
-    for t in clean_tags:
-        if current_length + len(t) + 1 <= 400:
-            final_tags.append(t)
-            current_length += len(t) + 1
-
-    cat_id = get_valid_category_id(category)
-    if not cat_id:
-        cat_id = "22"
-
-    # Erstelle API Metadaten Structure
-    snippet = {
-        "title": title,
-        "description": desc or "",
-        "categoryId": str(cat_id),
-    }
-    
-    if final_tags:
-        snippet["tags"] = final_tags
-
-    if default_lang:
-        snippet["defaultLanguage"] = default_lang
-    if default_audio_lang:
-        snippet["defaultAudioLanguage"] = default_audio_lang
-
-    status = {
-        "privacyStatus": privacy,
-        "embeddable": embeddable,
-        "license": license_type,
-    }
-    if publish_at:
-        status["publishAt"] = publish_at
-
-    metadata_body = {
-        "snippet": snippet,
-        "status": status,
-    }
-
-    if rec_date:
-        rec_date = normalize_recording_date(rec_date)
-        metadata_body["recordingDetails"] = {"recordingDate": rec_date}
-
-    parsed_loc = parse_location(location) if isinstance(location, str) else location
-    if parsed_loc:
-        metadata_body["recordingDetails"] = metadata_body.get("recordingDetails", {})
-        metadata_body["recordingDetails"]["location"] = parsed_loc
-
+    metadata_body = _build_metadata(
+        title, desc, category, tags, rec_date, location, privacy, publish_at,
+        license_type, default_lang, default_audio_lang, embeddable
+    )
     logger.debug(f"PAYLOAD DEBUG: {json.dumps(metadata_body, ensure_ascii=False)}")
 
-    parts = "snippet,status"
-    if "recordingDetails" in metadata_body:
-        parts += ",recordingDetails"
+    upload_url = _init_upload_session(
+        session, metadata_body, file_size, access_token, cred_file, client_secrets_file
+    )
+    video_id = _upload_chunks(
+        session, upload_url, file_path, file_size, chunksize, access_token,
+        cred_file, client_secrets_file
+    )
 
-    # 1. Resumable Upload Session bei Google initialisieren
-    init_url = f"https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part={parts}"
-    init_headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json; charset=UTF-8",
-        "X-Upload-Content-Length": str(file_size),
-        "X-Upload-Content-Type": "video/*"
-    }
-
-    logger.info("Initialisiere Resumable Upload Session...")
-
-    init_res = None
-    init_max_retries = 3
-    for init_attempt in range(1, init_max_retries + 1):
-        try:
-            init_res = session.post(init_url, headers=init_headers, json=metadata_body, timeout=60)
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"Netzwerkfehler bei Session-Init (Versuch {init_attempt}/{init_max_retries}): {e}")
-            if init_attempt < init_max_retries:
-                time.sleep(2 ** init_attempt)
-                continue
-            raise RuntimeError(f"Session-Init nach {init_max_retries} Versuchen fehlgeschlagen: {e}") from e
-
-        if init_res.status_code == 200:
-            break
-
-        # Token abgelaufen: einmalig erneuern und erneut versuchen
-        if init_res.status_code == 401 and init_attempt < init_max_retries:
-            access_token = get_access_token(cred_file, client_secrets_file)
-            init_headers["Authorization"] = f"Bearer {access_token}"
-            continue
-
-        # 403 ist nicht automatisch ein abgelaufener Token - quotaExceeded/forbidden/
-        # insufficientPermissions etc. lösen sich durch Refresh+Retry nicht und sollten
-        # nicht sinnlos wiederholt werden. Nur echte Rate-Limits rechtfertigen Retry.
-        if init_res.status_code == 403:
-            reason, message = _parse_api_error(init_res.text)
-            if reason in _RETRYABLE_403_REASONS and init_attempt < init_max_retries:
-                logger.warning(
-                    f"YouTube API meldet Rate-Limit ({reason}) bei Session-Init. "
-                    f"Retry {init_attempt}/{init_max_retries} in {2 ** init_attempt}s..."
-                )
-                time.sleep(2 ** init_attempt)
-                continue
-            error_cls = QuotaExceededError if reason in _QUOTA_403_REASONS else PermanentUploadError
-            raise error_cls(
-                f"Nicht behebbarer 403-Fehler bei Session-Init ({reason or 'unbekannt'}): {message or init_res.text[:500]}"
-            )
-
-        # Transiente Server-Fehler (inkl. 429 Rate-Limit): mit Backoff erneut versuchen
-        if init_res.status_code in (429, 500, 502, 503, 504) and init_attempt < init_max_retries:
-            logger.warning(
-                f"YouTube API meldet {init_res.status_code} bei Session-Init. "
-                f"Retry {init_attempt}/{init_max_retries} in {2 ** init_attempt}s..."
-            )
-            time.sleep(2 ** init_attempt)
-            continue
-
-        reason, message = _parse_api_error(init_res.text)
-        detail = f"{reason}: {message}" if reason else init_res.text[:500]
-        raise RuntimeError(f"Session-Init fehlgeschlagen ({init_res.status_code}): {detail}")
-
-    upload_url = init_res.headers.get("Location")
-    if not upload_url:
-        raise RuntimeError("Keine Upload-Location im Header erhalten.")
-
-    logger.info(f"Starte Chunk-Upload ({file_size / (1024 * 1024):.2f} MB) mit Chunksize {chunksize / (1024 * 1024):.1f} MB...")
-
-    max_retries = 5
-    video_id = None
-    uploaded_bytes = 0
-    progress_bar = _UploadProgressBar(file_size) if sys.stderr.isatty() else None
-
-    # 2. Datei in Chunks unterteilt übertragen
-    with open(file_path, "rb") as f:
-        while uploaded_bytes < file_size:
-            chunk_start = uploaded_bytes
-            f.seek(chunk_start)
-            chunk = f.read(chunksize)
-            chunk_len = len(chunk)
-            chunk_end = chunk_start + chunk_len - 1
-
-            chunk_headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Range": f"bytes {chunk_start}-{chunk_end}/{file_size}",
-                "Content-Type": "video/*"
-            }
-
-            chunk_success = False
-            for attempt in range(1, max_retries + 1):
-                try:
-                    put_res = session.put(upload_url, headers=chunk_headers, data=chunk, timeout=120)
-
-                    # Status 200/201: Upload vollständig abgeschlossen
-                    if put_res.status_code in (200, 201):
-                        resp_data = put_res.json()
-                        video_id = resp_data.get("id")
-                        uploaded_bytes = file_size
-                        chunk_success = True
-                        write_heartbeat()
-                        if progress_bar:
-                            progress_bar.finish()
-                        logger.info(f"Upload ERFOLGREICH abgeschlossen! Video-ID: {video_id}")
-                        break
-
-                    # Status 308: Incomplete, Chunk erfolgreich empfangen (mit robuster Offset-Auswertung)
-                    elif put_res.status_code == 308:
-                        range_hdr = put_res.headers.get("Range")
-                        if range_hdr and "-" in range_hdr:
-                            try:
-                                uploaded_bytes = int(range_hdr.split("-")[1]) + 1
-                            except (ValueError, IndexError):
-                                uploaded_bytes += chunk_len
-                        else:
-                            uploaded_bytes += chunk_len
-
-                        if uploaded_bytes < file_size and uploaded_bytes % config.CHUNK_UNIT_BYTES != 0:
-                            uploaded_bytes = (uploaded_bytes // config.CHUNK_UNIT_BYTES) * config.CHUNK_UNIT_BYTES
-                            logger.warning(f"Offset korrigiert auf 256-KiB-Grenze: {uploaded_bytes} Bytes")
-
-                        # Fortschritt IMMER auch als Log-Zeile ausgeben, nicht nur wenn kein
-                        # Live-Balken aktiv ist: sys.stderr.isatty() liefert in Containern mit
-                        # `tty: true` (z.B. fuer Podman-Kompatibilitaet gesetzt) auch im
-                        # unbeaufsichtigten Daemon-Betrieb True, wodurch bislang ausschliesslich
-                        # der Live-Balken lief - der schreibt per \r direkt auf stderr, landet
-                        # also nie im Logger/in `docker logs`-Historie, und macht den Fortschritt
-                        # bei einem spaeteren Blick ins Log unsichtbar.
-                        pct = (uploaded_bytes / file_size) * 100
-                        logger.info(f"Fortschritt: {uploaded_bytes / (1024 * 1024):.1f} / {file_size / (1024 * 1024):.1f} MB ({pct:.1f}%)")
-                        if progress_bar:
-                            progress_bar.update(uploaded_bytes)
-                        chunk_success = True
-                        write_heartbeat()
-                        break
-
-                    # Token abgelaufen: Access Token erneuern und erneut versuchen
-                    elif put_res.status_code == 401:
-                        access_token = get_access_token(cred_file, client_secrets_file)
-                        chunk_headers["Authorization"] = f"Bearer {access_token}"
-                        raise RuntimeError("Token erneuert, versuche Chunk erneut...")
-
-                    # 403 ist nicht automatisch ein abgelaufener Token - quotaExceeded/
-                    # forbidden/insufficientPermissions etc. lösen sich durch Token-Refresh
-                    # nicht und sollten nicht 5x sinnlos wiederholt werden (kostet Zeit und
-                    # weiteres API-Quota, ohne die Ursache zu beheben). Nur echte Rate-Limits
-                    # (Google-SDK-Konvention) rechtfertigen Retry.
-                    elif put_res.status_code == 403:
-                        reason, message = _parse_api_error(put_res.text)
-                        if reason in _RETRYABLE_403_REASONS:
-                            raise RuntimeError(f"Rate-Limit ({reason}), versuche erneut...")
-                        error_cls = QuotaExceededError if reason in _QUOTA_403_REASONS else PermanentUploadError
-                        raise error_cls(
-                            f"Nicht behebbarer 403-Fehler ({reason or 'unbekannt'}): {message or put_res.text[:500]}"
-                        )
-
-                    # Alle übrigen Status-Codes: immer loggen, damit Fehler nicht stillschweigend verschwinden
-                    else:
-                        logger.error(
-                            f"Unerwarteter Status {put_res.status_code} beim Chunk-Upload "
-                            f"(Versuch {attempt}/{max_retries}): {put_res.text[:500]}"
-                        )
-
-                        # "Failed to parse Content-Range header": bekannter, gelegentlich
-                        # transienter Ausrutscher der YouTube-API (v.a. beim letzten Chunk
-                        # sehr grosser Uploads), kein echter Client-Bug - statt das wie einen
-                        # dauerhaften Fehler zu behandeln und die ganze Datei zu verwerfen,
-                        # den tatsaechlichen Serverstand per Status-Check abfragen und von
-                        # dort weitermachen.
-                        if put_res.status_code == 400 and "Content-Range" in put_res.text:
-                            try:
-                                probe_video_id, probe_uploaded = _probe_upload_offset(
-                                    session, upload_url, access_token, file_size
-                                )
-                            except (requests.exceptions.RequestException, RuntimeError) as probe_err:
-                                logger.warning(f"Status-Check nach Content-Range-Fehler fehlgeschlagen: {probe_err}")
-                            else:
-                                if probe_video_id:
-                                    video_id = probe_video_id
-                                    uploaded_bytes = file_size
-                                    chunk_success = True
-                                    write_heartbeat()
-                                    if progress_bar:
-                                        progress_bar.finish()
-                                    logger.info(
-                                        f"Upload war laut Status-Check bereits abgeschlossen! Video-ID: {video_id}"
-                                    )
-                                    break
-
-                                uploaded_bytes = probe_uploaded
-                                if uploaded_bytes < file_size and uploaded_bytes % config.CHUNK_UNIT_BYTES != 0:
-                                    uploaded_bytes = (uploaded_bytes // config.CHUNK_UNIT_BYTES) * config.CHUNK_UNIT_BYTES
-                                logger.warning(
-                                    "Content-Range-Fehler war vermutlich transient - Serverstand laut "
-                                    f"Status-Check: {uploaded_bytes / (1024 * 1024):.1f} MB. Setze fort..."
-                                )
-                                chunk_success = True
-                                write_heartbeat()
-                                break
-
-                        # Dauerhafte Client-Fehler (z.B. 400 invalidVideoMetadata/uploadLimitExceeded,
-                        # 404 Session weg) lassen sich durch Wiederholen nicht beheben -> sofort
-                        # abbrechen statt 5x zu retryen
-                        if 400 <= put_res.status_code < 500 and put_res.status_code not in (401, 403, 408, 429):
-                            reason, message = _parse_api_error(put_res.text)
-                            detail = f"{reason}: {message}" if reason else put_res.text[:500]
-                            error_cls = QuotaExceededError if reason in _QUOTA_400_REASONS else PermanentUploadError
-                            raise error_cls(
-                                f"Nicht behebbarer Fehler ({put_res.status_code}): {detail}"
-                            )
-                        raise RuntimeError(f"Transienter Fehler ({put_res.status_code}), versuche erneut...")
-
-                except PermanentUploadError:
-                    raise  # nicht abfangen/retryen - direkt an den Aufrufer durchreichen
-
-                except Exception as e:  # noqa: BLE001 - fängt hier bewusst auch selbst geworfene RuntimeErrors als Retry-Signal ab, nicht nur echte Netzwerkfehler
-                    logger.warning(f"Fehler bei Chunk-Upload (Versuch {attempt}/{max_retries}): {e}")
-                    time.sleep(2 ** attempt)
-
-            if not chunk_success:
-                raise RuntimeError("Max Retries beim Upload überschritten.")
-
-    # 3. Post-Upload-Schritte: Thumbnail hochladen und Playlist-Zuweisung
-    # Bei sehr großen Dateien kann der Chunk-Upload allein schon die Token-Lebensdauer
-    # (~1h) überschreiten. Token hier proaktiv erneuern statt erst bei 401 zu reagieren.
+    # Post-Upload-Schritte: Bei sehr großen Dateien kann der Chunk-Upload allein schon die
+    # Token-Lebensdauer (~1h) überschreiten - Token hier proaktiv erneuern.
     try:
         access_token = get_access_token(cred_file, client_secrets_file)
     # RuntimeError deckt hier auch RefreshTokenRevokedError/PermanentUploadError ab - der
-    # Video-Upload ist bereits abgeschlossen (video_id existiert), ein widerrufener Token
-    # darf die Rückgabe des erfolgreichen Uploads nicht verhindern, Thumbnail/Playlist
-    # sind rein optionale Post-Upload-Schritte.
+    # Video-Upload ist bereits abgeschlossen, Thumbnail/Playlist sind rein optional.
     except (OSError, ValueError, KeyError, RuntimeError, requests.exceptions.RequestException) as refresh_err:
         logger.warning(f"Token-Refresh vor Post-Upload-Schritten fehlgeschlagen, verwende bestehenden Token: {refresh_err}")
 
     try:
         if video_id:
             if thumb_path and os.path.exists(thumb_path):
-                try:
-                    logger.info(f"Lade benutzerdefiniertes Thumbnail hoch: {thumb_path}")
-                    thumb_url = f"https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={video_id}"
-                    with open(thumb_path, "rb") as tf:
-                        thumb_bytes = tf.read()
-
-                    for thumb_attempt in (1, 2):
-                        t_res = session.post(
-                            thumb_url,
-                            headers={
-                                "Authorization": f"Bearer {access_token}",
-                                "Content-Type": "image/jpeg"
-                            },
-                            data=thumb_bytes,
-                            timeout=60
-                        )
-                        if t_res.status_code in (200, 201):
-                            logger.info("Thumbnail erfolgreich gesetzt.")
-                            break
-                        elif t_res.status_code == 401 and thumb_attempt == 1:
-                            logger.warning("Thumbnail-Upload: Token abgelaufen, erneuere und versuche erneut...")
-                            access_token = get_access_token(cred_file, client_secrets_file)
-                            continue
-                        else:
-                            # 403 ist kein automatischer Token-Ablauf mehr (z.B. "forbidden",
-                            # wenn der Kanal nicht fuer Custom-Thumbnails freigeschaltet ist) -
-                            # reason mitloggen statt blind mit neuem Token zu retryen.
-                            reason, message = _parse_api_error(t_res.text)
-                            detail = f"{reason}: {message}" if reason else t_res.text
-                            logger.warning(f"Thumbnail-Upload fehlgeschlagen ({t_res.status_code}): {detail}")
-                            break
-                # RuntimeError deckt hier auch RefreshTokenRevokedError/PermanentUploadError ab -
-                # Thumbnail ist optional, darf den bereits erfolgreichen Upload nicht kippen.
-                except (OSError, ValueError, KeyError, RuntimeError, requests.exceptions.RequestException) as te:
-                    logger.warning(f"Fehler beim Thumbnail-Setzen: {te}")
+                _set_thumbnail(session, video_id, thumb_path, access_token, cred_file, client_secrets_file)
 
             if playlist_name:
                 add_video_to_playlist(
@@ -792,11 +793,8 @@ def upload_single_video(
             if open_link:
                 v_url = f"https://www.youtube.com/watch?v={video_id}"
                 logger.info(f"Öffne Browser-Link: {v_url}")
-                # Rein optionaler Komfort-Nebeneffekt (nur im manuellen CLI-Modus
-                # erreichbar, siehe pipeline.py) - auf einem Headless-Server ohne
-                # registrierbaren Browser wirft dies webbrowser.Error, was sonst
-                # den bereits erfolgreichen Upload faelschlich als Fehlschlag
-                # markieren wuerde (video_id ist an dieser Stelle schon vergeben).
+                # Auf einem Headless-Server ohne Browser wirft dies webbrowser.Error, was
+                # den bereits erfolgreichen Upload sonst fälschlich als Fehlschlag markieren würde.
                 try:
                     webbrowser.open(v_url)
                 except (webbrowser.Error, OSError) as e:
@@ -805,5 +803,3 @@ def upload_single_video(
         cleanup_generated_thumbnail(thumb_path)
 
     return video_id
-
-
