@@ -410,7 +410,7 @@ def upload_single_video(
     embeddable=config.ALLOW_EMBEDDING,
     cred_file=None,
     client_secrets_file=None,
-    chunksize=268435456,
+    chunksize=config.DEFAULT_CHUNKSIZE,
     open_link=False
 ):
     """

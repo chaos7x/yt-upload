@@ -31,6 +31,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # YouTube Limitierungen & Netzwerk-Chunk-Spezifikationen
 SEGMENT_TIME_SEC = 36000     # Maximum 10 Stunden pro Video vor automatischem Splitting
 CHUNK_UNIT_BYTES = 262144    # 256 KiB Basis-Einheit für Resumable Chunk Uploads (Zwingende YouTube API Vorgabe)
+DEFAULT_CHUNKSIZE = 268435456  # 256 MiB Standard-Chunkgröße für den Upload (--chunksize)
 
 
 def _is_dedicated_mount(path):
