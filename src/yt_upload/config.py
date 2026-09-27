@@ -31,6 +31,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # YouTube Limitierungen & Netzwerk-Chunk-Spezifikationen
 SEGMENT_TIME_SEC = 36000     # Maximum 10 Stunden pro Video vor automatischem Splitting
 CHUNK_UNIT_BYTES = 262144    # 256 KiB Basis-Einheit für Resumable Chunk Uploads (Zwingende YouTube API Vorgabe)
+DEFAULT_CHUNKSIZE = 268435456  # 256 MiB Standard-Chunkgröße für den Upload (--chunksize)
 
 
 def _is_dedicated_mount(path):
@@ -41,14 +42,14 @@ def _is_dedicated_mount(path):
     kann diese beiden Fälle nicht unterscheiden, da `mkdir -p` das Verzeichnis
     auch ganz ohne jeden Mount anlegt (siehe Bug: /log-Logdatei wurde erzeugt,
     obwohl kein Log-Volume mehr gemountet war). Vergleicht dazu die
-    Geräte-ID (st_dev) von path und seinem Elternverzeichnis: unterschiedliche
-    st_dev bedeutet, dass dort tatsächlich ein Volume/Bind-Mount eingehängt ist.
+    Geräte-ID (st_dev) von path mit der des Root-Dateisystems (/), wie in
+    fetchbridge: so wird auch ein Mount erkannt, der weiter oben im Pfad
+    liegt als path selbst.
     """
     if not os.path.isdir(path):
         return False
-    parent = os.path.dirname(path.rstrip("/")) or "/"
     try:
-        return os.stat(path).st_dev != os.stat(parent).st_dev
+        return os.stat(path).st_dev != os.stat("/").st_dev
     except OSError:
         return False
 

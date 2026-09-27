@@ -75,7 +75,7 @@ def parse_arguments(argv=None):
 
     parser.add_argument("--credentials-file", default=None, help="Pfad zur OAuth Credentials JSON")
     parser.add_argument("--client-secrets", help="Pfad zur Google Client Secrets JSON")
-    parser.add_argument("--chunksize", type=int, default=268435456, help="Upload Chunk-Größe in Bytes")
+    parser.add_argument("--chunksize", type=int, default=config.DEFAULT_CHUNKSIZE, help="Upload Chunk-Größe in Bytes")
     parser.add_argument("--open-link", action="store_true", help="Nach Upload Video-URL im Standardbrowser öffnen")
 
     return parser.parse_args(argv)

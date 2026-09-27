@@ -46,6 +46,12 @@ def _quarantine_symlink(file_path, filename):
     return target_corrupt
 
 
+def _arg(args, name, default=None):
+    """Liefert args.<name>, falls gesetzt (truthy), sonst default. args darf None sein."""
+    value = getattr(args, name, None)
+    return value if value else default
+
+
 def process_single_file(file_path, args=None, manage_files=True):
     """
     Steuert die vollständige Verarbeitung einer Datei:
@@ -109,8 +115,9 @@ def process_single_file(file_path, args=None, manage_files=True):
     meta = extract_metadata_and_thumb(work_path)
 
     # Zusammenführen von Argumenten und Container-Metadaten
-    raw_title = (args.title if args and hasattr(args, 'title') and args.title else meta["title"]) or os.path.splitext(filename)[0]
-    raw_desc = (args.description if args and hasattr(args, 'description') and args.description else meta["description"]) or config.DEFAULT_DESCRIPTION
+    # (Reihenfolge jeweils: CLI-Argument -> Container-Metadaten -> config-Default)
+    raw_title = _arg(args, "title", meta["title"]) or os.path.splitext(filename)[0]
+    raw_desc = _arg(args, "description", meta["description"]) or config.DEFAULT_DESCRIPTION
 
     raw_desc = sanitize_text(raw_desc)
 
@@ -121,29 +128,30 @@ def process_single_file(file_path, args=None, manage_files=True):
     title_base = censor_text(raw_title)
     desc_base = censor_text(raw_desc)
 
-    category = (args.category if args and hasattr(args, 'category') and args.category else meta["genre"]) or config.DEFAULT_CATEGORY
-    tags = (args.tags if args and hasattr(args, 'tags') and args.tags else meta["genre"]) or config.DEFAULT_TAGS
-    rec_date = (args.recording_date if args and hasattr(args, 'recording_date') and args.recording_date else meta["date"])
-    thumb_path = (args.thumbnail if args and hasattr(args, 'thumbnail') and args.thumbnail else meta["thumb_path"])
+    category = _arg(args, "category", meta["genre"]) or config.DEFAULT_CATEGORY
+    tags = _arg(args, "tags", meta["genre"]) or config.DEFAULT_TAGS
+    rec_date = _arg(args, "recording_date", meta["date"])
+    thumb_path = _arg(args, "thumbnail", meta["thumb_path"])
 
-    privacy = (args.privacy if args and hasattr(args, 'privacy') and args.privacy else None) or config.VIDEO_PRIVACY
-    publish_at = args.publish_at if args and hasattr(args, 'publish_at') else None
-    license_type = (args.license if args and hasattr(args, 'license') and args.license else None) or "youtube"
-    location = args.location if args and hasattr(args, 'location') else None
-    default_lang = (args.default_language if args and hasattr(args, 'default_language') and args.default_language else None) or config.VIDEO_LANGUAGE
-    default_audio_lang = (args.default_audio_language if args and hasattr(args, 'default_audio_language') and args.default_audio_language else None) or config.VIDEO_LANGUAGE
-    embeddable = args.embeddable if (args and hasattr(args, 'embeddable') and args.embeddable is not None) else config.ALLOW_EMBEDDING
-    
-    target_playlist = config.PLAYLIST_NAME
-    if args and hasattr(args, 'playlist') and args.playlist:
-        target_playlist = args.playlist
-    elif config.DYNAMIC_PLAYLISTS and meta["artist"]:
-        target_playlist = meta["artist"]
+    privacy = _arg(args, "privacy", config.VIDEO_PRIVACY)
+    publish_at = _arg(args, "publish_at")
+    license_type = _arg(args, "license", "youtube")
+    location = _arg(args, "location")
+    default_lang = _arg(args, "default_language", config.VIDEO_LANGUAGE)
+    default_audio_lang = _arg(args, "default_audio_language", config.VIDEO_LANGUAGE)
+    # embeddable=False ist ein gültiger expliziter Wert, daher Prüfung auf None statt auf Truthiness
+    embeddable = getattr(args, "embeddable", None)
+    if embeddable is None:
+        embeddable = config.ALLOW_EMBEDDING
 
-    cred_file = (args.credentials_file if args and hasattr(args, 'credentials_file') and args.credentials_file else None) or config.CREDENTIALS_FILE
-    client_secrets = args.client_secrets if args and hasattr(args, 'client_secrets') else None
-    chunksize = args.chunksize if args and hasattr(args, 'chunksize') else 268435456
-    open_link = args.open_link if args and hasattr(args, 'open_link') else False
+    target_playlist = _arg(args, "playlist") or (
+        meta["artist"] if config.DYNAMIC_PLAYLISTS and meta["artist"] else config.PLAYLIST_NAME
+    )
+
+    cred_file = _arg(args, "credentials_file", config.CREDENTIALS_FILE)
+    client_secrets = _arg(args, "client_secrets")
+    chunksize = _arg(args, "chunksize", config.DEFAULT_CHUNKSIZE)
+    open_link = _arg(args, "open_link", False)
 
     # Splitting-Prüfung ausführen
     segments = split_video_if_needed(work_path, output_dir=split_output_dir)
