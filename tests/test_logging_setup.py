@@ -97,7 +97,7 @@ class TestIsDedicatedMount:
         assert config._is_dedicated_mount("/log") is False
 
     def test_returns_false_for_plain_baked_in_directory_same_device(self, config, monkeypatch):
-        """Gleiche st_dev wie das Elternverzeichnis = kein echter Mount, nur ein normaler Ordner."""
+        """Gleiche st_dev wie das Root-Dateisystem = kein echter Mount, nur ein normaler Ordner."""
         monkeypatch.setattr(config.os.path, "isdir", lambda p: True)
 
         class FakeStat:
@@ -109,7 +109,7 @@ class TestIsDedicatedMount:
         assert config._is_dedicated_mount("/log") is False
 
     def test_returns_true_for_real_mount_different_device(self, config, monkeypatch):
-        """Unterschiedliche st_dev zum Elternverzeichnis = tatsächlich eingehängtes Volume/Bind-Mount."""
+        """Unterschiedliche st_dev zum Root-Dateisystem = tatsächlich eingehängtes Volume/Bind-Mount."""
         monkeypatch.setattr(config.os.path, "isdir", lambda p: True)
 
         class FakeStat:
@@ -122,6 +122,18 @@ class TestIsDedicatedMount:
         monkeypatch.setattr(config.os, "stat", fake_stat)
 
         assert config._is_dedicated_mount("/log") is True
+
+    def test_detects_mount_higher_up_in_path(self, config, monkeypatch):
+        """Mount auf /srv, Unterverzeichnis liegt auf demselben Gerät wie sein Parent - trotzdem ein Mount."""
+        monkeypatch.setattr(config.os.path, "isdir", lambda p: True)
+
+        class FakeStat:
+            def __init__(self, st_dev):
+                self.st_dev = st_dev
+
+        monkeypatch.setattr(config.os, "stat", lambda p: FakeStat(st_dev=1 if p == "/" else 2))
+
+        assert config._is_dedicated_mount("/srv/media-pipeline/incoming") is True
 
     def test_permission_error_on_stat_returns_false(self, config, monkeypatch):
         monkeypatch.setattr(config.os.path, "isdir", lambda p: True)
