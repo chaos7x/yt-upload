@@ -6,7 +6,6 @@ Instanz-Lock und periodische Housekeeping-Aufgaben.
 import logging
 import os
 import signal
-import tempfile
 import time
 
 from yt_upload import config
@@ -207,6 +206,11 @@ def acquire_instance_lock():
     (z.B. Daemon + Auto-Modus, oder zwei Daemons) gleichzeitig dieselben
     IN_DIR/WORK_DIR-Verzeichnisse bearbeiten und sich Dateien gegenseitig wegschnappen.
     Gibt True zurück, wenn der Lock erfolgreich erworben wurde.
+
+    Die Lock-Datei liegt in WORK_DIR statt im Temp-Verzeichnis: /tmp ist pro
+    Container (und pro Host) getrennt, zwei Container auf demselben
+    /srv/media-pipeline-Mount hätten sich dort also nie gesehen. Über NFS ist
+    flock() je nach Server/Mount-Optionen trotzdem nicht verlässlich.
     """
     global _lock_file_handle
 
@@ -214,21 +218,29 @@ def acquire_instance_lock():
         logger.warning("fcntl nicht verfügbar (kein Unix-System) - Lockfile-Schutz übersprungen.")
         return True
 
-    lock_path = os.path.join(tempfile.gettempdir(), "yt-upload.lock")
+    lock_path = os.path.join(config.WORK_DIR, ".yt-upload.lock")
     try:
         # Handle bleibt bewusst für die gesamte Prozesslaufzeit offen, damit der
         # flock() gehalten wird; ein `with`-Block würde ihn sofort wieder
-        # schließen und den Lock damit freigeben.
-        _lock_file_handle = open(lock_path, "w")  # noqa: SIM115
+        # schließen und den Lock damit freigeben. "a" statt "w", damit ein
+        # abgewiesener zweiter Start die PID der laufenden Instanz nicht leert;
+        # gekürzt wird erst, nachdem der Lock tatsächlich erworben wurde.
+        _lock_file_handle = open(lock_path, "a")  # noqa: SIM115
         fcntl.flock(_lock_file_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_file_handle.truncate(0)
         _lock_file_handle.write(str(os.getpid()))
         _lock_file_handle.flush()
         return True
-    except (OSError, BlockingIOError):
+    except BlockingIOError:
         from yt_upload import __title__
         logger.error(
             f"Es läuft bereits eine andere Instanz von {__title__} (Lock: {lock_path}). Breche ab."
         )
+        return False
+    except OSError as e:
+        # z.B. WORK_DIR fehlt oder ist nicht beschreibbar - nicht als
+        # "andere Instanz läuft" melden, das würde in die falsche Richtung führen.
+        logger.error(f"Konnte Lock-Datei {lock_path} nicht anlegen/sperren ({e}). Breche ab.")
         return False
 
 

@@ -51,7 +51,7 @@ def unique_path(directory, filename):
     """
     Generiert einen eindeutigen Dateipfad durch Anhängen von Zählern, falls die Datei existiert.
     Hinweis: Prüfung und späteres Verschieben sind nicht atomar (TOCTOU); das ist unkritisch,
-    solange acquire_instance_lock() parallele Instanzen desselben Skripts verhindert.
+    solange acquire_instance_lock() (Lock-Datei in WORK_DIR) parallele Instanzen verhindert.
     """
     candidate = os.path.join(directory, filename)
     if not os.path.lexists(candidate):
