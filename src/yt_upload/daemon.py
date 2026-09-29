@@ -51,16 +51,20 @@ WATCH_MASK = (
 # ==============================================================================
 # INOTIFY & EINGANGSÜBERWACHUNG
 # ==============================================================================
+# .webm: Matroska-Untermenge ohne Attachments - wird wie .mkv verarbeitet, nur
+# ohne eingebettetes Cover (Thumbnail fällt auf ein gerendertes Frame zurück).
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".m4v", ".webm")
+
+
 def find_existing_video(target_dir=None):
     """Sucht rekursiv nach kompatiblen Videodateien im Eingangsverzeichnis."""
     if target_dir is None:
         target_dir = config.IN_DIR
-    valid_exts = (".mp4", ".mkv", ".mov", ".m4v")
     if not os.path.isdir(target_dir):
         return None
     for root, _, files in os.walk(target_dir):
         for file in files:
-            if file.lower().endswith(valid_exts):
+            if file.lower().endswith(VIDEO_EXTENSIONS):
                 return os.path.join(root, file)
     return None
 
@@ -102,7 +106,6 @@ def wait_for_input(target_dir=None, inotify_adapter=None):
         return existing
 
     logger.info(f"Warte via inotify auf neue Dateien in {target_dir}...")
-    valid_exts = (".mp4", ".mkv", ".mov", ".m4v")
 
     # Fallback-Schleife falls inotify nicht im System geladen ist
     if not HAS_INOTIFY or inotify_adapter is None:
@@ -151,7 +154,7 @@ def wait_for_input(target_dir=None, inotify_adapter=None):
                     continue
 
                 # Reagiere auf abgeschlossene Schreibvorgänge oder Verschiebungen
-                if any(t in type_names for t in ["IN_CLOSE_WRITE", "IN_MOVED_TO"]) and filename.lower().endswith(valid_exts):
+                if any(t in type_names for t in ["IN_CLOSE_WRITE", "IN_MOVED_TO"]) and filename.lower().endswith(VIDEO_EXTENSIONS):
                     full_path = os.path.join(path, filename)
                     if os.path.isfile(full_path):
                         logger.info(f"Datei erfolgreich via inotify erkannt: {full_path}")
