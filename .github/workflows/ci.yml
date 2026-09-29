@@ -21,6 +21,11 @@ jobs:
       - name: Test- und Lint-Abhängigkeiten installieren
         run: pip install -r requirements-test.txt
 
+      # Für tests/test_media_containers.py (echte mkv/mp4/m4v/mov/webm-Dateien,
+      # zur Laufzeit per ffmpeg erzeugt) - ohne ffmpeg würden sie übersprungen.
+      - name: ffmpeg installieren
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Tests ausführen
         run: pytest -v
 
