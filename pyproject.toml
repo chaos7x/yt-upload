@@ -1,6 +1,6 @@
 [project]
 name = "yt-upload"
-version = "1.12.6"
+version = "1.12.7"
 description = "Automatisierter YouTube Upload Workflow"
 readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.11"
@@ -30,11 +30,6 @@ Homepage = "https://github.com/chaos7x/yt-upload"
 Repository = "https://github.com/chaos7x/yt-upload"
 Issues = "https://github.com/chaos7x/yt-upload/issues"
 
-[project.optional-dependencies]
-# inotify ist bewusst optional: der Dämon-Modus hat einen try/except-Fallback
-# auf Polling, falls das Modul fehlt (siehe yt_upload/daemon.py, HAS_INOTIFY).
-daemon = ["inotify"]
-
 [project.scripts]
 yt-upload = "yt_upload.main:main"
 get-token = "get_token.get_token:main"
@@ -43,12 +38,11 @@ get-token = "get_token.get_token:main"
 # `pip install --break-system-packages --no-deps .` Die oben deklarierten
 # Dependencies dienen primär der Dokumentation/Metadaten (pip show yt-upload).
 # Tatsächlich installiert wird requests je nach Umgebung über apt/apk
-# (python3-requests/py3-requests) oder direkt per pip (Dockerfile.pyimg);
-# inotify kommt unter Debian/Alpine ebenfalls über pip (siehe Dockerfile bzw.
-# Dockerfile.alpine), da das apk-Paket py3-inotify ein anderes, unpassendes
-# Projekt packt. --no-deps stellt in den apt/apk-basierten Installationsarten
-# sicher, dass pip nur das eigene Package installiert und requests nicht
-# zusätzlich von PyPI nachlädt.
+# (python3-requests/py3-requests) oder direkt per pip (Dockerfile.pyimg).
+# inotify braucht kein Fremdpaket mehr (eigener ctypes-Wrapper, siehe
+# yt_upload/inotify_tree.py). --no-deps stellt in den apt/apk-basierten
+# Installationsarten sicher, dass pip nur das eigene Package installiert und
+# requests nicht zusätzlich von PyPI nachlädt.
 [build-system]
 requires = ["setuptools>=84.0.0"]
 build-backend = "setuptools.build_meta"

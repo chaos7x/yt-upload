@@ -90,6 +90,12 @@ def daemon():
 
 
 @pytest.fixture(scope="session")
+def inotify_tree():
+    from yt_upload import inotify_tree
+    return inotify_tree
+
+
+@pytest.fixture(scope="session")
 def logging_setup():
     from yt_upload import logging_setup
     return logging_setup

@@ -9,7 +9,7 @@ Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten 
 ## ✨ Features
 
 * **Direkte HTTP REST API v3:** Native Implementierung für Resumable Chunk-Uploads ohne schwerfällige externe API-Wrapper.
-* **Inotify-Ordnerüberwachung:** Überwacht `IN_DIR` im Dämon-Modus (`-D`) in Echtzeit auf Dateiveränderungen (`.mp4`, `.mkv`, `.mov`, `.m4v`) inklusive Polling-Fallback, falls `inotify` nicht verfügbar ist.
+* **Inotify-Ordnerüberwachung:** Überwacht `IN_DIR` im Dämon-Modus (`-D`) in Echtzeit auf Dateiveränderungen (`.mp4`, `.mkv`, `.mov`, `.m4v`) über einen eigenen, abhängigkeitsfreien ctypes-Wrapper (Linux und FreeBSD ≥ 14.5), inklusive Polling-Fallback auf Systemen ohne inotify.
 * **Drei flexible Betriebsmodi:**
   1. **Dämon-Modus (`-D` / `--daemon`):** Dauerhafter Hintergrunddienst zur automatischen Überwachung.
   2. **Auto-Batch (`-a` / `--auto`):** Einmaliges Abarbeiten eines Verzeichnisses mit anschließendem Beenden.
@@ -226,8 +226,8 @@ services:
 `yt-upload` läuft auch direkt auf dem Host, ganz ohne Container. Systemabhängigkeiten kommen bewusst über den jeweiligen Paketmanager statt über PyPI - `pip` installiert ausschließlich das eigene Package:
 
 ```bash
-# System-Abhängigkeiten (requests immer, inotify nur für den Dämon-Modus)
-apt install python3-pip python3-setuptools python3-requests python3-inotify ffmpeg
+# System-Abhängigkeiten
+apt install python3-pip python3-setuptools python3-requests ffmpeg
 # (unter Alpine/anderen Distros entsprechend: apk add / dnf install ...)
 
 cd /pfad/zu/yt-upload
@@ -243,9 +243,9 @@ Die Logdatei landet je nach Umgebung automatisch am sinnvollsten Ort (`/var/log/
 Jedes [GitHub Release](https://github.com/chaos7x/yt-upload/releases) enthält zwei `.deb`-Anhänge, aufgeteilt nach Nutzung - keine manuelle `pip`-Installation nötig:
 
 * **`yt-upload_<version>_all.deb`** - CLI, Python-Package und Config (`/etc/yt-upload/upload.conf`). Reicht für den rein manuellen Datei-Modus (`yt-upload video.mp4 ...`) und Auto-Batch (`-a`). `apt`/`dpkg` löst `python3-requests`/`ffmpeg` automatisch mit auf.
-* **`yt-upload-daemon_<version>_all.deb`** - nur für den Dämon-Modus (`-D`) nötig: systemd-Service, dedizierter Systemuser (`yt-upload`) und die `python3-inotify`-Abhängigkeit für die Echtzeit-Ordnerüberwachung. Hängt von `yt-upload` in exakt derselben Version ab, zieht es also automatisch mit.
+* **`yt-upload-daemon_<version>_all.deb`** - nur für den Dämon-Modus (`-D`) nötig: systemd-Service und dedizierter Systemuser (`yt-upload`). Hängt von `yt-upload` in exakt derselben Version ab, zieht es also automatisch mit.
 
-Nur die CLI ohne Dämon-Overhead (Systemuser, `python3-inotify`, nie aktivierter systemd-Service):
+Nur die CLI ohne Dämon-Overhead (Systemuser, nie aktivierter systemd-Service):
 
 ```bash
 wget https://github.com/chaos7x/yt-upload/releases/latest/download/yt-upload_<version>_all.deb
@@ -289,7 +289,7 @@ sed -i 's/^#0 3/0 3/' /etc/cron.d/yt-upload-retry
 
 ### Alternative: Standalone .pyz (kein pip/apt nötig)
 
-`./build-pyz.sh` baut aus `src/` je ein selbst-enthaltenes `.pyz` pro Eintrag in `[project.scripts]` (`yt-upload.pyz` und `get-token.pyz`) samt `requests` und optional `inotify` - läuft auf jedem System mit einem nackten `python3`, ganz ohne vorherige `pip install`/`apt install`:
+`./build-pyz.sh` baut aus `src/` je ein selbst-enthaltenes `.pyz` pro Eintrag in `[project.scripts]` (`yt-upload.pyz` und `get-token.pyz`) samt `requests` - läuft auf jedem System mit einem nackten `python3`, ganz ohne vorherige `pip install`/`apt install`:
 
 ```bash
 ./build-pyz.sh
@@ -351,8 +351,8 @@ Es gibt drei Dockerfiles für unterschiedliche Basis-Images - alle bauen dasselb
 | Dockerfile | Basis | Installationsweg |
 |---|---|---|
 | `Dockerfile` (Standard) | `debian:trixie-slim` | Zweistufiger Build, `pip install --no-deps` in einer separaten Builder-Stage, System-Pakete (`requests`) über `apt` |
-| `Dockerfile.alpine` | `alpine:3` | Wie oben, aber `apk` statt `apt`; `inotify` kommt hier per `pip` (das `apk`-Paket `py3-inotify` packt ein anderes, unpassendes Projekt) |
-| `Dockerfile.pyimg` | `python:3-slim` | Einstufig, alles über `pip` (inkl. `requests`/`inotify` direkt aus den in `pyproject.toml` deklarierten Dependencies) |
+| `Dockerfile.alpine` | `alpine:3` | Wie oben, aber `apk` statt `apt` |
+| `Dockerfile.pyimg` | `python:3-slim` | Einstufig, alles über `pip` (inkl. `requests` direkt aus den in `pyproject.toml` deklarierten Dependencies) |
 
 Alle drei Varianten lassen kein Build-Tooling (`pip`/`setuptools`, sofern nicht ohnehin Teil des Basis-Images) im finalen Laufzeit-Image zurück.
 

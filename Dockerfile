@@ -47,7 +47,7 @@ COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
 # ------------------------------------------
 # LAYER 2: System-Pakete & Python-Bibliotheken in EINEM Rutsch installieren + Aufräumen
 # ------------------------------------------
-# Installiert Python 3, requests, inotify, ExifTool, Midnight Commander (mc)
+# Installiert Python 3, requests, ExifTool, Midnight Commander (mc)
 # sowie ca-certificates direkt über den Paketmanager. Bewusst OHNE pip/
 # setuptools - die werden nur im Builder (STUFE 1) gebraucht.
 # apt-get upgrade: das Base-Image selbst (Pakete wie gzip/perl-base/libssl3/
@@ -60,7 +60,6 @@ COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     python3 \
     python3-requests \
-    python3-inotify \
     libcom-err2 \
     mc \
     ca-certificates \

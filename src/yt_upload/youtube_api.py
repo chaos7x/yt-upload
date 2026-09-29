@@ -184,7 +184,7 @@ class _UploadProgressBar:
     tokland/youtube-upload's progressbar2-Widget aus Percentage/Bar/
     FileTransferSpeed/DataSize/ETA). Bewusst ohne die zusaetzliche
     progressbar2-Dependency von Hand nachgebaut - dieses Projekt haelt sich
-    schon bei inotify/requests bewusst an minimale, per apt/apk statt PyPI
+    schon bei requests bewusst an minimale, per apt/apk statt PyPI
     installierbare Abhaengigkeiten, und fuer eine reine Terminal-Optik lohnt
     sich das Docker-Paketierungs-Gedoens (3 Dockerfile-Varianten + Bare-Metal)
     nicht. Aktualisiert sich nur bei Chunk-Grenzen (siehe --chunksize) - fuer
