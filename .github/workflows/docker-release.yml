@@ -182,22 +182,22 @@ jobs:
           # Nur relevant, wenn ein klassischer Syslog-Daemon laeuft (siehe
           # logging_setup.setup_logging()) - der Datei-Handler rotiert dann
           # bewusst selbst NICHT mehr, das uebernimmt logrotate.
-          cp logrotate.d/yt-upload pkgroot-cli/etc/logrotate.d/yt-upload
+          cp debian/logrotate.d/yt-upload pkgroot-cli/etc/logrotate.d/yt-upload
 
           mkdir -p pkgroot-daemon/usr/lib/systemd/system pkgroot-daemon/etc/init.d pkgroot-daemon/etc/cron.d
-          cp yt-upload.service pkgroot-daemon/usr/lib/systemd/system/yt-upload.service
-          cp yt-upload-retry.service pkgroot-daemon/usr/lib/systemd/system/yt-upload-retry.service
-          cp yt-upload-retry.timer pkgroot-daemon/usr/lib/systemd/system/yt-upload-retry.timer
+          cp debian/yt-upload.service pkgroot-daemon/usr/lib/systemd/system/yt-upload.service
+          cp debian/yt-upload-retry.service pkgroot-daemon/usr/lib/systemd/system/yt-upload-retry.service
+          cp debian/yt-upload-retry.timer pkgroot-daemon/usr/lib/systemd/system/yt-upload-retry.timer
           # /etc/init.d-Fallback fuer Nicht-systemd-Hosts (Devuan, Debian mit
-          # sysvinit-core) - siehe daemon-postinst.sh fuer die Registrierung.
-          cp init.d/yt-upload pkgroot-daemon/etc/init.d/yt-upload
+          # sysvinit-core) - siehe debian/daemon-postinst.sh fuer die Registrierung.
+          cp debian/init.d/yt-upload pkgroot-daemon/etc/init.d/yt-upload
           chmod 755 pkgroot-daemon/etc/init.d/yt-upload
           # Cron-Pendant zum Retry-Timer (sysvinit kennt keine Timer-Units) -
           # standardmaessig auskommentiert/deaktiviert ausgeliefert, auf jedem
           # Host (auch mit systemd) harmlos, da inaktiv, bis jemand die Zeile
           # darin einkommentiert. --config-files unten sorgt dafuer, dass ein
           # spaeteres Einkommentieren ein Upgrade uebersteht.
-          cp yt-upload-retry.cron pkgroot-daemon/etc/cron.d/yt-upload-retry
+          cp debian/yt-upload-retry.cron pkgroot-daemon/etc/cron.d/yt-upload-retry
 
       - name: yt-upload (CLI) .deb bauen
         run: |
@@ -230,9 +230,9 @@ jobs:
             --depends "yt-upload = $DEB_VERSION" \
             --depends adduser \
             --config-files /etc/cron.d/yt-upload-retry \
-            --after-install daemon-postinst.sh \
-            --before-remove daemon-prerm.sh \
-            --after-remove daemon-postrm.sh \
+            --after-install debian/daemon-postinst.sh \
+            --before-remove debian/daemon-prerm.sh \
+            --after-remove debian/daemon-postrm.sh \
             -C pkgroot-daemon \
             usr etc
 

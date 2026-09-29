@@ -287,6 +287,36 @@ Ohne systemd übernimmt cron dieselbe Aufgabe: `/etc/cron.d/yt-upload-retry` wir
 sed -i 's/^#0 3/0 3/' /etc/cron.d/yt-upload-retry
 ```
 
+### Alternative: FreeBSD (rc.d)
+
+Für FreeBSD ≥ 14.5 (native inotify in der libc) liegt unter `freebsd/rc.d/yt-upload` ein rc.d-Skript bei, das Pendant zum systemd-Service aus `debian/`. Ein Paket gibt es dafür nicht, die Einrichtung ist manuell und aktiviert den Dienst bewusst nicht von selbst. Bisher nur gegen die Doku geschrieben, noch nicht auf einem echten FreeBSD-System getestet.
+
+```sh
+# Abhängigkeiten (py311 an die installierte Python-Version anpassen)
+pkg install python3 py311-pip py311-requests ffmpeg
+cd /pfad/zu/yt-upload
+pip install --no-deps .
+
+# Dienstuser und gemeinsame Pipeline-Gruppe (wie debian/postinst)
+pw groupshow media-pipeline >/dev/null 2>&1 || pw groupadd media-pipeline
+pw usershow yt-upload >/dev/null 2>&1 || pw useradd yt-upload -d /nonexistent -s /usr/sbin/nologin -G media-pipeline
+install -d -o root -g media-pipeline -m 2775 /srv/media-pipeline /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry
+install -d /etc/yt-upload
+
+# rc.d-Skript installieren und aktivieren
+install -m 755 freebsd/rc.d/yt-upload /usr/local/etc/rc.d/yt-upload
+sysrc yt_upload_enable=YES
+service yt-upload start
+```
+
+Vor dem `service yt-upload start` wie unter Linux `/etc/yt-upload/upload.conf` anlegen (Vorlage: `upload.conf.example`) und einmalig `get-token` ausführen. Optionaler täglicher Retry-Requeue per cron (FreeBSD liest `/usr/local/etc/cron.d/`):
+
+```sh
+echo '0 3 * * * yt-upload /usr/local/bin/yt-upload --requeue-retries >/dev/null 2>&1' > /usr/local/etc/cron.d/yt-upload-retry
+```
+
+Das Skript startet `yt-upload -D` über `daemon(8)` (Neustart bei Absturz, Userwechsel inkl. `media-pipeline`-Zusatzgruppe) und leitet die Ausgabe an syslog weiter (Tag `yt-upload`, landet standardmäßig in `/var/log/messages`). Weitere Einstellungen (`yt_upload_runas`, `yt_upload_args`, `yt_upload_env`) stehen im Kopf des Skripts.
+
 ### Alternative: Standalone .pyz (kein pip/apt nötig)
 
 `./build-pyz.sh` baut aus `src/` je ein selbst-enthaltenes `.pyz` pro Eintrag in `[project.scripts]` (`yt-upload.pyz` und `get-token.pyz`) samt `requests` - läuft auf jedem System mit einem nackten `python3`, ganz ohne vorherige `pip install`/`apt install`:

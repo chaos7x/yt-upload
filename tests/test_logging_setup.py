@@ -223,7 +223,7 @@ class TestSetupLoggingFileTrigger:
     def test_syslog_daemon_detected_adds_plain_file_handler_without_own_rotation(self, logging_setup, config, monkeypatch, tmp_path):
         """
         Ein laufender Syslog-Daemon impliziert praktisch immer auch logrotate
-        (siehe logrotate.d/yt-upload) - die App soll dort NICHT zusaetzlich
+        (siehe debian/logrotate.d/yt-upload) - die App soll dort NICHT zusaetzlich
         selbst per RotatingFileHandler rotieren, sonst kommen sich beide
         Mechanismen in die Quere.
         """
