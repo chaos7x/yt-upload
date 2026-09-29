@@ -236,10 +236,17 @@ jobs:
             -C pkgroot-daemon \
             usr etc
 
-      - name: .deb-Pakete als Release-Assets hochladen
+      - name: FreeBSD-Pakete (.pkg) bauen
+        # Eigenes Skript statt fpm -t freebsd: fpm verwirft dort Abhaengigkeiten
+        # und Datei-Owner (siehe freebsd/build-pkg.py).
+        run: python3 freebsd/build-pkg.py "$DEB_VERSION" .
+
+      - name: .deb- und FreeBSD-Pakete als Release-Assets hochladen
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.build-and-push.outputs.version }}
-          files: "*.deb"
+          files: |
+            *.deb
+            *.pkg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
