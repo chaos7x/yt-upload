@@ -9,7 +9,7 @@ Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten 
 ## ✨ Features
 
 * **Direkte HTTP REST API v3:** Native Implementierung für Resumable Chunk-Uploads ohne schwerfällige externe API-Wrapper.
-* **Inotify-Ordnerüberwachung:** Überwacht `IN_DIR` im Dämon-Modus (`-D`) in Echtzeit auf Dateiveränderungen (`.mp4`, `.mkv`, `.mov`, `.m4v`) über einen eigenen, abhängigkeitsfreien ctypes-Wrapper (Linux und FreeBSD ≥ 14.5), inklusive Polling-Fallback auf Systemen ohne inotify.
+* **Inotify-Ordnerüberwachung:** Überwacht `IN_DIR` im Dämon-Modus (`-D`) in Echtzeit auf Dateiveränderungen (`.mp4`, `.mkv`, `.mov`, `.m4v`, `.webm`) über einen eigenen, abhängigkeitsfreien ctypes-Wrapper (Linux und FreeBSD ≥ 14.5), inklusive Polling-Fallback auf Systemen ohne inotify.
 * **Drei flexible Betriebsmodi:**
   1. **Dämon-Modus (`-D` / `--daemon`):** Dauerhafter Hintergrunddienst zur automatischen Überwachung.
   2. **Auto-Batch (`-a` / `--auto`):** Einmaliges Abarbeiten eines Verzeichnisses mit anschließendem Beenden.
