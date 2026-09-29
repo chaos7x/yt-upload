@@ -1,0 +1,55 @@
+#!/bin/sh
+#
+# PROVIDE: yt_upload
+# REQUIRE: LOGIN NETWORKING syslogd
+# KEYWORD: shutdown
+#
+# FreeBSD-rc.d-Pendant zu debian/yt-upload.service. Installation und
+# Aktivierung siehe README.md ("FreeBSD"). Wird bewusst NICHT automatisch
+# aktiviert:
+#
+#   sysrc yt_upload_enable=YES
+#   service yt-upload start
+#
+# Variablen (in /etc/rc.conf bzw. per sysrc):
+#   yt_upload_enable
+#       YES zum Aktivieren (Standard: NO)
+#   yt_upload_runas
+#       Dienstuser (Standard: yt-upload). Bewusst nicht yt_upload_user:
+#       damit wuerde rc.subr schon daemon(8) selbst per su als dieser
+#       User starten, daemon -u braucht aber root.
+#   yt_upload_command
+#       Pfad zum Programm (Standard: /usr/local/bin/yt-upload)
+#   yt_upload_args
+#       Zusaetzliche Argumente nach -D (Standard: leer). Bewusst nicht
+#       yt_upload_flags: das haengt rc.subr an daemon(8) statt an
+#       yt-upload an.
+#   yt_upload_env
+#       Umgebungsvariablen, z.B. "LOG_LEVEL=DEBUG" (wertet rc.subr aus)
+#
+# yt-upload daemonisiert sich nicht selbst (laeuft im Vordergrund wie unter
+# systemd Type=simple) - daemon(8) uebernimmt Forken, Userwechsel (-u ruft
+# initgroups() auf, damit greift auch die media-pipeline-Zusatzgruppe wie
+# SupplementaryGroups= in der systemd-Unit) und Neustart bei Absturz (-r,
+# wie Restart=on-failure). -S leitet stdout/stderr an syslog weiter: ohne
+# /proc erkennt die App keinen laufenden syslogd und loggt nur auf stdout.
+# SIGTERM an den daemon(8)-Supervisor wird an den Prozess weitergereicht.
+
+. /etc/rc.subr
+
+name="yt_upload"
+rcvar="yt_upload_enable"
+
+load_rc_config $name
+
+: ${yt_upload_enable:="NO"}
+: ${yt_upload_runas:="yt-upload"}
+: ${yt_upload_command:="/usr/local/bin/yt-upload"}
+: ${yt_upload_args:=""}
+
+pidfile="/var/run/${name}.pid"
+procname="/usr/sbin/daemon"
+command="/usr/sbin/daemon"
+command_args="-f -S -T yt-upload -r -R 5 -P ${pidfile} -u ${yt_upload_runas} ${yt_upload_command} -D ${yt_upload_args}"
+
+run_rc_command "$1"
