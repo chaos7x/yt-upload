@@ -23,15 +23,15 @@ except ImportError:
     HAS_FCNTL = False
 
 # ------------------------------------------------------------------------------
-# Inotify Import-Prüfung (Echtzeit-Dateisystemüberwachung unter Linux)
-# Versucht das pyinotify bzw. inotify Modul zu laden, um Polling zu vermeiden.
+# Inotify Import-Prüfung (Echtzeit-Dateisystemüberwachung unter Linux und
+# FreeBSD >= 14.5). Der eigene ctypes-Wrapper wirft ImportError, wenn die libc
+# kein inotify bereitstellt (z.B. OpenBSD/macOS) - dann greift Polling.
 # ------------------------------------------------------------------------------
 try:
-    import inotify.adapters
-    import inotify.constants
+    from yt_upload import inotify_tree
     HAS_INOTIFY = True
 except ImportError:
-    inotify = None
+    inotify_tree = None
     HAS_INOTIFY = False
 
 # Watch-Mask beschränkt auf die tatsächlich relevanten Events (abgeschlossene
@@ -43,7 +43,7 @@ except ImportError:
 # Event-Schleife (eigener Scan -> eigene Events -> erneuter Trigger -> ...),
 # die unabhängig von echten Video-Uploads dauerhaft CPU verbraucht.
 WATCH_MASK = (
-    (inotify.constants.IN_CLOSE_WRITE | inotify.constants.IN_MOVED_TO)
+    (inotify_tree.IN_CLOSE_WRITE | inotify_tree.IN_MOVED_TO)
     if HAS_INOTIFY else None
 )
 
@@ -251,7 +251,7 @@ def run_daemon():
             if HAS_INOTIFY and current_watched_dir != config.IN_DIR:
                 try:
                     logger.info(f"Initialisiere InotifyTree auf: {config.IN_DIR}")
-                    inotify_adapter = inotify.adapters.InotifyTree(config.IN_DIR, mask=WATCH_MASK)
+                    inotify_adapter = inotify_tree.InotifyTree(config.IN_DIR, mask=WATCH_MASK)
                     current_watched_dir = config.IN_DIR
                 except Exception as e:  # noqa: BLE001 - inotify-Bibliothek hat keine eng gefasste Exception-Hierarchie; jeder Fehler hier soll auf den Polling-Fallback zurückfallen statt den Daemon abzubrechen
                     logger.error(f"Konnte InotifyTree für {config.IN_DIR} nicht initialisieren: {e}")

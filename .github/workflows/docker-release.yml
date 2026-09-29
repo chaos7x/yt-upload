@@ -160,8 +160,8 @@ jobs:
           # Python-Package und Config (alles, was auch der rein manuelle
           # Datei-Modus braucht), "yt-upload-daemon" nur den systemd-Service
           # samt Systemuser-Anlage. So zieht sich ein reiner CLI-User (der nur
-          # `yt-upload video.mp4` aufruft) nicht automatisch python3-inotify,
-          # den dedizierten Systemuser und den nie aktivierten systemd-Service
+          # `yt-upload video.mp4` aufruft) nicht automatisch den dedizierten
+          # Systemuser und den nie aktivierten systemd-Service
           # mit rein.
 
           # /usr/lib/python3/dist-packages statt eines eigenen PYTHONPATH-
@@ -228,7 +228,6 @@ jobs:
             --description "Systemd-Dienst fuer den yt-upload-Daemon-Modus (yt-upload -D)" \
             --url "https://github.com/${{ github.repository }}" \
             --depends "yt-upload = $DEB_VERSION" \
-            --depends python3-inotify \
             --depends adduser \
             --config-files /etc/cron.d/yt-upload-retry \
             --after-install daemon-postinst.sh \
