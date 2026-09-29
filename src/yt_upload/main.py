@@ -25,6 +25,21 @@ def _parse_bool(value):
     raise argparse.ArgumentTypeError(f"Ungültiger Boolean-Wert: '{value}' (erwartet: true/false)")
 
 
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Wie ArgumentDefaultsHelpFormatter, aber ohne "(default: None)".
+
+    Bei den meisten Optionen bedeutet None nicht "aus"/False, sondern "nicht
+    gesetzt - Wert kommt aus Container-Metadaten bzw. upload.conf". Da die
+    Config beim Parsen noch nicht geladen ist, beschreibt der jeweilige
+    Hilfetext diese Fallback-Kette selbst.
+    """
+
+    def _get_help_string(self, action):
+        if action.default is None:
+            return action.help
+        return super()._get_help_string(action)
+
+
 def parse_arguments(argv=None):
     """Initialisiert das Parsing der Kommandozeilenargumente.
 
@@ -34,7 +49,7 @@ def parse_arguments(argv=None):
     """
     parser = argparse.ArgumentParser(
         description=f"{__title__} v{__version__}",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        formatter_class=_HelpFormatter
     )
 
     parser.add_argument(
@@ -47,34 +62,34 @@ def parse_arguments(argv=None):
     parser.add_argument("--healthcheck", action="store_true", help="Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort (für Docker HEALTHCHECK)")
     parser.add_argument("--requeue-retries", action="store_true", help="Verschiebt alle Dateien aus RETRY_DIR zurück nach IN_DIR und beendet sich sofort (für einen periodischen systemd-Timer, siehe yt-upload-retry.timer)")
 
-    parser.add_argument("-t", "--title", help="Video-Titel (Standard: Metadaten/Dateiname)")
+    parser.add_argument("-t", "--title", help="Video-Titel (Standard: title-Tag der Datei, sonst Dateiname)")
     parser.add_argument(
         "--title-template", default="{title} (Teil {n}/{total})",
         help="Titel-Vorlage bei mehreren Dateien in einem Aufruf (nur wirksam, wenn -t/--title "
              "gesetzt ist). Platzhalter: {title}, {n} (1-basierter Index), {total}"
     )
     desc_group = parser.add_mutually_exclusive_group()
-    desc_group.add_argument("-d", "--description", help="Video-Beschreibung")
-    desc_group.add_argument("--description-file", help="Pfad zu einer Textdatei mit der Video-Beschreibung (alternativ zu -d/--description)")
-    parser.add_argument("-c", "--category", help="Kategorie ID oder Name (z.B. Entertainment, Gaming, 22)")
+    desc_group.add_argument("-d", "--description", help="Video-Beschreibung (Standard: comment/description-Tag der Datei, sonst default_description aus upload.conf)")
+    desc_group.add_argument("--description-file", help="Pfad zu einer Textdatei mit der Video-Beschreibung (alternativ zu -d/--description, gleicher Fallback)")
+    parser.add_argument("-c", "--category", help="Kategorie ID oder Name (z.B. Entertainment, Gaming, 22). Standard: genre-Tag der Datei, sonst default_category aus upload.conf")
     parser.add_argument("-v", "--version", action="version", version=f"{__title__} v{__version__}")
-    parser.add_argument("--tags", help="Kommagetrennte Liste von Tags")
+    parser.add_argument("--tags", help="Kommagetrennte Liste von Tags (Standard: genre-Tag der Datei, sonst default_tags aus upload.conf)")
     
-    parser.add_argument("--privacy", choices=["public", "private", "unlisted"], default=None, help="Sichtbarkeit")
+    parser.add_argument("--privacy", choices=["public", "private", "unlisted"], default=None, help="Sichtbarkeit (Standard: privacy_status aus upload.conf, sonst unlisted; mit --publish-at immer private)")
 
-    parser.add_argument("--thumbnail", help="Pfad zu benutzerdefiniertem Thumbnail-Bild")
-    parser.add_argument("--playlist", help="Name der Ziel-Playlist")
-    parser.add_argument("--publish-at", help="Geplante Veröffentlichung (ISO-Format 8601)")
-    parser.add_argument("--license", choices=["youtube", "creativeCommon"], default=None, help="Videolizenz")
-    parser.add_argument("--location", help="Geo-Koordinaten (Format: 'latitude=50.9,longitude=6.9')")
-    parser.add_argument("--recording-date", help="Aufnahmedatum")
+    parser.add_argument("--thumbnail", help="Pfad zu benutzerdefiniertem Thumbnail-Bild (Standard: eingebettetes Cover, sonst automatisch generiert, falls auto_generate_thumbnail aktiv)")
+    parser.add_argument("--playlist", help="Name der Ziel-Playlist (Standard: playlist_name aus upload.conf bzw. Artist bei enable_dynamic_playlists; leer = keine Playlist)")
+    parser.add_argument("--publish-at", help="Geplante Veröffentlichung (ISO-Format 8601). Ohne Angabe: sofort gemäß --privacy")
+    parser.add_argument("--license", choices=["youtube", "creativeCommon"], default=None, help="Videolizenz (Standard: youtube)")
+    parser.add_argument("--location", help="Geo-Koordinaten (Format: 'latitude=50.9,longitude=6.9'). Ohne Angabe: kein Standort")
+    parser.add_argument("--recording-date", help="Aufnahmedatum (Standard: date-Tag der Datei, sonst keins)")
 
-    parser.add_argument("--default-language", default=None, help="Standardsprache des Titels/der Beschreibung")
-    parser.add_argument("--default-audio-language", default=None, help="Standardsprache des Audios")
-    parser.add_argument("--embeddable", type=_parse_bool, default=None, metavar="{true,false}", help="Einbetten auf externen Seiten erlauben oder verbieten (true/false)")
+    parser.add_argument("--default-language", default=None, help="Standardsprache des Titels/der Beschreibung (Standard: default_language aus upload.conf, sonst de)")
+    parser.add_argument("--default-audio-language", default=None, help="Standardsprache des Audios (Standard: default_language aus upload.conf, sonst de)")
+    parser.add_argument("--embeddable", type=_parse_bool, default=None, metavar="{true,false}", help="Einbetten auf externen Seiten erlauben oder verbieten (true/false). Standard: allow_embedding aus upload.conf, sonst true")
 
-    parser.add_argument("--credentials-file", default=None, help="Pfad zur OAuth Credentials JSON")
-    parser.add_argument("--client-secrets", help="Pfad zur Google Client Secrets JSON")
+    parser.add_argument("--credentials-file", default=None, help="Pfad zur OAuth Credentials JSON (Standard: credentials_file aus upload.conf bzw. CREDENTIALS_FILE, sonst /etc/yt-upload/ bzw. /app/oauth/youtube-upload-credentials.json)")
+    parser.add_argument("--client-secrets", help="Pfad zur Google Client Secrets JSON (Standard: client_id/client_secret aus der Credentials-Datei)")
     parser.add_argument("--chunksize", type=int, default=config.DEFAULT_CHUNKSIZE, help="Upload Chunk-Größe in Bytes")
     parser.add_argument("--open-link", action="store_true", help="Nach Upload Video-URL im Standardbrowser öffnen")
 
