@@ -117,17 +117,17 @@ def extract_metadata_and_thumb(file_path):
     thumb_path = os.path.join(temp_dir, f"yt_thumb_{pid}_{timestamp}.jpg")
     temp_attach = os.path.join(temp_dir, f"yt_attach_{pid}_{timestamp}.jpg")
 
-    # Versuche eingebettete Cover-Bilder zu extrahieren (MKV / MP4 Attachments)
+    # Versuche eingebettete Cover-Bilder zu extrahieren. MKV-Bild-Attachments
+    # (z.B. yt-dlp --embed-thumbnail) und MP4-Cover (covr) stellt ffmpeg beide
+    # als Videostream mit attached_pic-Disposition bereit: "0:v" minus "0:V"
+    # (= alle Videostreams außer echten Videos) greift genau diese. Dekodieren
+    # statt -c copy, damit auch PNG/WebP-Cover als JPEG ankommen.
     try:
-        cmd_mkv = ["ffmpeg", "-y", "-dump_attachment:t:0", temp_attach, "-i", file_path]
-        subprocess.run(cmd_mkv, capture_output=True, text=True, check=False)
-
-        if not os.path.exists(temp_attach) or os.path.getsize(temp_attach) == 0:
-            cmd_mp4 = [
-                "ffmpeg", "-y", "-i", file_path,
-                "-map", "0:v:m:attached_pic:0?", "-c", "copy", temp_attach
-            ]
-            subprocess.run(cmd_mp4, capture_output=True, text=True, check=False)
+        cmd_cover = [
+            "ffmpeg", "-y", "-i", file_path,
+            "-map", "0:v", "-map", "-0:V", "-frames:v", "1", temp_attach
+        ]
+        subprocess.run(cmd_cover, capture_output=True, text=True, check=False)
 
         if os.path.exists(temp_attach) and os.path.getsize(temp_attach) > 0:
             cmd_conv = ["ffmpeg", "-y", "-i", temp_attach, "-q:v", "2", thumb_path]
