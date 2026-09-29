@@ -287,9 +287,20 @@ Ohne systemd übernimmt cron dieselbe Aufgabe: `/etc/cron.d/yt-upload-retry` wir
 sed -i 's/^#0 3/0 3/' /etc/cron.d/yt-upload-retry
 ```
 
-### Alternative: FreeBSD (rc.d)
+### Alternative: FreeBSD-Paket (.pkg)
 
-Für FreeBSD ≥ 14.5 (native inotify in der libc) liegt unter `freebsd/rc.d/yt-upload` ein rc.d-Skript bei, das Pendant zum systemd-Service aus `debian/`. Ein Paket gibt es dafür nicht, die Einrichtung ist manuell und aktiviert den Dienst bewusst nicht von selbst. Bisher nur gegen die Doku geschrieben, noch nicht auf einem echten FreeBSD-System getestet.
+Jedes Release enthält neben den `.deb`-Dateien auch FreeBSD-Pakete, je eines für FreeBSD 14 und 15 (`…-freebsd14.pkg` / `…-freebsd15.pkg`, gebaut von `freebsd/build-pkg.py`). Sie hängen fest an Python 3.11 (`python311`), damit Interpreter und Python-Abhängigkeiten zusammenpassen:
+
+```sh
+pkg install python311 py311-requests ffmpeg
+pkg add yt-upload-<version>-freebsd14.pkg yt-upload-daemon-<version>-freebsd14.pkg
+```
+
+Das CLI-Paket `yt-upload` legt `/etc/yt-upload/upload.conf` aus der Vorlage an, falls noch keine existiert. `yt-upload-daemon` bringt das rc.d-Skript mit und legt den Dienstuser, die Gruppe `media-pipeline` und die Verzeichnisse unter `/srv/media-pipeline` an, genau wie das Debian-Paket. Der Dienst wird dabei bewusst **nicht** aktiviert, die nötigen `sysrc`/`service`-Befehle zeigt `pkg` nach der Installation an. Noch nicht auf einem echten FreeBSD-System getestet.
+
+### Alternative: FreeBSD manuell (rc.d)
+
+Für FreeBSD ≥ 14.5 (native inotify in der libc) liegt unter `freebsd/rc.d/yt-upload` ein rc.d-Skript bei, das Pendant zum systemd-Service aus `debian/`. Ohne das fertige Paket geht die Einrichtung auch von Hand und aktiviert den Dienst ebenfalls nicht von selbst. Bisher nur gegen die Doku geschrieben, noch nicht auf einem echten FreeBSD-System getestet.
 
 ```sh
 # Abhängigkeiten (py311 an die installierte Python-Version anpassen)
