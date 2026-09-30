@@ -110,7 +110,7 @@ services:
       # einzigen Bind-Mount direkt auf /srv/media-pipeline - trifft damit
       # exakt den Code-Default, keine ENV-Umbiegung nötig. "incoming" ist
       # der einzige Unterordner davon, in den auch fetchbridge hineinschreibt.
-      # Zeigt auf denselben gemeinsamen /opt/docker/media-pipeline-Host-Baum
+      # Zeigt auf denselben gemeinsamen /srv/media-pipeline-Host-Baum
       # wie tw-recorders und fetchbridges Compose-Dateien: fetchbridge
       # braucht recordings/ UND incoming/ als EINEN gemeinsamen Mount, sonst
       # scheitert dessen os.rename() zwischen beiden mit EXDEV (siehe
@@ -137,7 +137,7 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: "/opt/docker/media-pipeline"
+      device: "/srv/media-pipeline"
 
   log:
     driver: local
@@ -149,7 +149,7 @@ volumes:
 
 #### 🔗 Interop mit Bare-Metal (gemeinsamer Host-Pfad)
 
-`user: "11107:11108"` oben ist nur ein Platzhalter. Läuft `fetchbridge`/`tw-recorder` (oder beide) als Bare-Metal-/`.deb`-Installation statt als Container, mountest du `yt-upload-data` statt auf `./yt-upload-data` direkt auf den echten Host-Pfad `/srv/media-pipeline` (`device: "/srv/media-pipeline"` oben, oder bei `docker run` direkt `-v /srv/media-pipeline:/srv/media-pipeline:rw`).
+`user: "11107:11108"` oben ist nur ein Platzhalter. `yt-upload-data` zeigt bereits auf denselben Host-Pfad `/srv/media-pipeline`, den auch die Bare-Metal-/`.deb`-Installationen von `fetchbridge`/`tw-recorder` nutzen - Container und Bare-Metal teilen sich den Baum also ohne weitere Anpassung (bei `docker run` entsprechend `-v /srv/media-pipeline:/srv/media-pipeline:rw`).
 
 `/srv/media-pipeline` gehört dort `root:media-pipeline` mit Modus `2775` (setgid, bewusst **ohne** Sticky-Bit) - Schreib-/Löschrecht hängt also rein an der **Gruppe**, nicht an der UID oder dem Datei-Owner. Die GID im `user:`-Feld muss deshalb mit der echten Host-Gruppe übereinstimmen, sonst gibt's `Permission denied`:
 
