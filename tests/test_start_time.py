@@ -1,5 +1,5 @@
 """
-Tests für die Aufnahme-Startzeit: creation_time-Tag (z.B. von tw-recorder)
+Tests für die Aufnahme-Startzeit: RECORDING_START-Tag (von tw-recorder)
 -> recordingDate mit Uhrzeit und "Aufnahmestart: ..."-Zeile in der
 Beschreibung, inklusive Zeitversatz pro Segment bei Splitting.
 """
@@ -16,7 +16,8 @@ DEFAULT_META = {
     "purl": None,
     "genre": None,
     "date": "20261001",
-    "creation_time": "2026-10-01T20:15:00.000000Z",
+    "creation_time": "2020-01-01T12:00:00.000000Z",
+    "recording_start": "2026-10-01T20:15:00Z",
     "artist": None,
     "thumb_path": None,
     "duration": 100,
@@ -33,19 +34,22 @@ def utc_tz(monkeypatch):
     time.tzset()
 
 
-class TestParseCreationTime:
+class TestParseStartTime:
     def test_ffprobe_format(self, text_utils):
-        assert text_utils.parse_creation_time("2026-10-01T20:15:00.000000Z") == datetime(2026, 10, 1, 20, 15, tzinfo=UTC)
+        assert text_utils.parse_start_time("2026-10-01T20:15:00.000000Z") == datetime(2026, 10, 1, 20, 15, tzinfo=UTC)
 
     def test_offset_is_converted_to_utc(self, text_utils):
-        assert text_utils.parse_creation_time("2026-10-01T22:15:00+02:00") == datetime(2026, 10, 1, 20, 15, tzinfo=UTC)
+        assert text_utils.parse_start_time("2026-10-01T22:15:00+02:00") == datetime(2026, 10, 1, 20, 15, tzinfo=UTC)
 
     def test_naive_value_is_assumed_utc(self, text_utils):
-        assert text_utils.parse_creation_time("2026-10-01 20:15:00") == datetime(2026, 10, 1, 20, 15, tzinfo=UTC)
+        assert text_utils.parse_start_time("2026-10-01 20:15:00") == datetime(2026, 10, 1, 20, 15, tzinfo=UTC)
 
-    @pytest.mark.parametrize("value", [None, "", "kaputt", "2026-10-01T00:00:00.000000Z"])
-    def test_missing_invalid_or_date_only_returns_none(self, text_utils, value):
-        assert text_utils.parse_creation_time(value) is None
+    def test_midnight_is_a_valid_start(self, text_utils):
+        assert text_utils.parse_start_time("2026-10-01T00:00:00Z") == datetime(2026, 10, 1, tzinfo=UTC)
+
+    @pytest.mark.parametrize("value", [None, "", "kaputt"])
+    def test_missing_or_invalid_returns_none(self, text_utils, value):
+        assert text_utils.parse_start_time(value) is None
 
 
 class TestFormatting:
@@ -93,8 +97,9 @@ class TestPipelineStartTime:
         calls = _run(pipeline, monkeypatch, tmp_path, DEFAULT_META, args=Namespace(recording_date="2020-01-01"))
         assert calls[0]["rec_date"] == "2020-01-01"
 
-    def test_without_creation_time_falls_back_to_date_tag(self, pipeline, monkeypatch, tmp_path):
-        meta = dict(DEFAULT_META, creation_time=None)
+    def test_without_recording_start_falls_back_to_date_tag(self, pipeline, monkeypatch, tmp_path):
+        """creation_time allein (z.B. aus einem yt-dlp-Download) wird bewusst ignoriert."""
+        meta = dict(DEFAULT_META, recording_start=None)
         calls = _run(pipeline, monkeypatch, tmp_path, meta)
         assert calls[0]["rec_date"] == "20261001"
         assert "Aufnahmestart" not in calls[0]["desc"]

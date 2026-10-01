@@ -24,7 +24,7 @@ from yt_upload.text_utils import (
     censor_text,
     format_recording_datetime,
     format_start_time_line,
-    parse_creation_time,
+    parse_start_time,
     sanitize_text,
     segment_start_time,
 )
@@ -137,9 +137,11 @@ def process_single_file(file_path, args=None, manage_files=True):
 
     category = _arg(args, "category", meta["genre"]) or config.DEFAULT_CATEGORY
     tags = _arg(args, "tags", meta["genre"]) or config.DEFAULT_TAGS
-    # Startzeit (creation_time-Tag, z.B. von tw-recorder) hat Vorrang vor dem
-    # reinen DATE-Tag, da sie die Uhrzeit enthält; --recording-date gewinnt immer.
-    start_time = parse_creation_time(meta.get("creation_time"))
+    # Startzeit (RECORDING_START-Tag von tw-recorder) hat Vorrang vor dem reinen
+    # DATE-Tag, da sie die Uhrzeit enthält; --recording-date gewinnt immer. Bewusst
+    # nicht creation_time: das kann ffmpeg z.B. bei yt-dlp-Downloads aus dem
+    # Quellstream mitkopieren und wäre dann keine Aufnahme-Startzeit.
+    start_time = parse_start_time(meta.get("recording_start"))
     rec_date_arg = _arg(args, "recording_date")
     rec_date = rec_date_arg or meta["date"]
     thumb_path = _arg(args, "thumbnail", meta["thumb_path"])

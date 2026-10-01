@@ -90,14 +90,11 @@ def normalize_recording_date(value):
     return value
 
 
-def parse_creation_time(value):
+def parse_start_time(value):
     """
-    Wandelt einen Container-Zeitstempel (ffprobe-Tag creation_time, z.B.
-    "2026-10-01T20:15:00.000000Z") in ein UTC-datetime um. Ohne Zeitzone
-    wird UTC angenommen. Gibt None zurück, wenn der Wert fehlt, nicht
-    parsebar ist oder nur ein Datum ohne Uhrzeit trägt (exakt 00:00:00) -
-    ältere tw-recorder-Dateien schreiben z.B. nur YYYYMMDD, was ffprobe als
-    Mitternacht ausgibt und keine echte Startzeit ist.
+    Wandelt den RECORDING_START-Tag (von tw-recorder, z.B. "2026-10-01T20:15:00Z")
+    in ein UTC-datetime um. Ohne Zeitzone wird UTC angenommen. Gibt None
+    zurück, wenn der Wert fehlt oder nicht parsebar ist.
     """
     if not value:
         return None
@@ -107,10 +104,7 @@ def parse_creation_time(value):
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
-    parsed = parsed.astimezone(UTC)
-    if (parsed.hour, parsed.minute, parsed.second, parsed.microsecond) == (0, 0, 0, 0):
-        return None
-    return parsed.replace(microsecond=0)
+    return parsed.astimezone(UTC).replace(microsecond=0)
 
 
 def segment_start_time(start, segment_index):

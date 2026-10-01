@@ -169,7 +169,7 @@ AUTO_THUMB_MIN_SEC = 15
 AUTO_THUMB_MAX_SEC = 120
 ALLOW_OVERWRITE = True
 DYNAMIC_PLAYLISTS = False
-# Startzeit aus dem creation_time-Tag als Zeile "Aufnahmestart: ..." der Beschreibung voranstellen
+# Startzeit aus dem RECORDING_START-Tag (tw-recorder) als Zeile "Aufnahmestart: ..." der Beschreibung voranstellen
 ADD_START_TIME_TO_DESCRIPTION = True
 
 # Laufzeit-Variablen für Hot-Reload und Zensur-Einstellungen
