@@ -20,7 +20,14 @@ from yt_upload.media import (
     is_file_ready_and_valid,
     split_video_if_needed,
 )
-from yt_upload.text_utils import censor_text, sanitize_text
+from yt_upload.text_utils import (
+    censor_text,
+    format_recording_datetime,
+    format_start_time_line,
+    parse_start_time,
+    sanitize_text,
+    segment_start_time,
+)
 from yt_upload.youtube_api import QuotaExceededError, upload_single_video
 
 logger = logging.getLogger(__name__)
@@ -130,7 +137,13 @@ def process_single_file(file_path, args=None, manage_files=True):
 
     category = _arg(args, "category", meta["genre"]) or config.DEFAULT_CATEGORY
     tags = _arg(args, "tags", meta["genre"]) or config.DEFAULT_TAGS
-    rec_date = _arg(args, "recording_date", meta["date"])
+    # Startzeit (RECORDING_START-Tag von tw-recorder) hat Vorrang vor dem reinen
+    # DATE-Tag, da sie die Uhrzeit enthält; --recording-date gewinnt immer. Bewusst
+    # nicht creation_time: das kann ffmpeg z.B. bei yt-dlp-Downloads aus dem
+    # Quellstream mitkopieren und wäre dann keine Aufnahme-Startzeit.
+    start_time = parse_start_time(meta.get("recording_start"))
+    rec_date_arg = _arg(args, "recording_date")
+    rec_date = rec_date_arg or meta["date"]
     thumb_path = _arg(args, "thumbnail", meta["thumb_path"])
 
     privacy = _arg(args, "privacy", config.VIDEO_PRIVACY)
@@ -180,14 +193,26 @@ def process_single_file(file_path, args=None, manage_files=True):
         if len(segments) > 1:
             part_title = f"{title_base} (Teil {idx + 1}/{len(segments)})"
 
+        # Bei Splitting beginnt jedes Segment um idx * SEGMENT_TIME_SEC später
+        part_desc = desc_base
+        part_rec_date = rec_date
+        part_start = segment_start_time(start_time, idx)
+        if part_start:
+            if not rec_date_arg:
+                part_rec_date = format_recording_datetime(part_start)
+            if config.ADD_START_TIME_TO_DESCRIPTION:
+                # Vorangestellt statt angehängt: upload_single_video() kürzt auf
+                # 5000 Zeichen, eine angehängte Zeile ginge bei langen Texten verloren.
+                part_desc = f"{format_start_time_line(part_start)}\n\n{desc_base}"
+
         try:
             video_id = upload_single_video(
                 file_path=seg,
                 title=part_title,
-                desc=desc_base,
+                desc=part_desc,
                 category=category,
                 tags=tags,
-                rec_date=rec_date,
+                rec_date=part_rec_date,
                 thumb_path=thumb_path,
                 playlist_name=target_playlist,
                 privacy=privacy,

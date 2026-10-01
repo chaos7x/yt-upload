@@ -6,7 +6,7 @@ Sanitizing und Zensur.
 import logging
 import re
 import unicodedata
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from yt_upload import config
 
@@ -88,6 +88,45 @@ def normalize_recording_date(value):
         return parsed.isoformat().replace("+00:00", "Z")
 
     return value
+
+
+def parse_start_time(value):
+    """
+    Wandelt den RECORDING_START-Tag (von tw-recorder, z.B. "2026-10-01T20:15:00Z")
+    in ein UTC-datetime um. Ohne Zeitzone wird UTC angenommen. Gibt None
+    zurück, wenn der Wert fehlt oder nicht parsebar ist.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).replace(microsecond=0)
+
+
+def segment_start_time(start, segment_index):
+    """Startzeit von Segment segment_index (0-basiert) bei Splitting nach config.SEGMENT_TIME_SEC."""
+    if start is None:
+        return None
+    return start + timedelta(seconds=segment_index * config.SEGMENT_TIME_SEC)
+
+
+def format_recording_datetime(start):
+    """ISO-8601-UTC-Format für recordingDetails.recordingDate (z.B. 2026-10-01T20:15:00Z)."""
+    return start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def format_start_time_line(start):
+    """
+    Beschreibungszeile mit der Startzeit, in der lokalen Zeitzone des
+    Prozesses (TZ-Variable; im Container ohne TZ also UTC), z.B.
+    "Aufnahmestart: 01.10.2026 22:15 CEST".
+    """
+    local = start.astimezone()
+    return f"Aufnahmestart: {local.strftime('%d.%m.%Y %H:%M')} {local.tzname() or 'UTC'}"
 
 
 def sanitize_text(text):

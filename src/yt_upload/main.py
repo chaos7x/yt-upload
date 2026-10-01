@@ -82,7 +82,7 @@ def parse_arguments(argv=None):
     parser.add_argument("--publish-at", help="Geplante Veröffentlichung (ISO-Format 8601). Ohne Angabe: sofort gemäß --privacy")
     parser.add_argument("--license", choices=["youtube", "creativeCommon"], default=None, help="Videolizenz (Standard: youtube)")
     parser.add_argument("--location", help="Geo-Koordinaten (Format: 'latitude=50.9,longitude=6.9'). Ohne Angabe: kein Standort")
-    parser.add_argument("--recording-date", help="Aufnahmedatum (Standard: date-Tag der Datei, sonst keins)")
+    parser.add_argument("--recording-date", help="Aufnahmedatum (Standard: RECORDING_START-Tag der Datei (tw-recorder), sonst date-Tag, sonst keins)")
 
     parser.add_argument("--default-language", default=None, help="Standardsprache des Titels/der Beschreibung (Standard: default_language aus upload.conf, sonst de)")
     parser.add_argument("--default-audio-language", default=None, help="Standardsprache des Audios (Standard: default_language aus upload.conf, sonst de)")

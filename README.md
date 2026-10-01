@@ -453,6 +453,12 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
 # Erstellt/Ermittelt automatisch Playlists basierend auf dem 'ARTIST'-Tag (true/false)
 #enable_dynamic_playlists = false
 
+# Startzeit aus dem RECORDING_START-Tag der Datei (schreibt tw-recorder) als
+# Zeile "Aufnahmestart: TT.MM.JJJJ HH:MM <Zone>" der Beschreibung voranstellen.
+# Zeitzone über die TZ-Umgebungsvariable (ohne TZ: UTC). Unabhängig davon wird
+# die Startzeit als recordingDate an YouTube übergeben. (true/false)
+#add_start_time_to_description = true
+
 # Standard-Sichtbarkeit für hochgeladene Videos (public, private, unlisted)
 #privacy_status = unlisted
 
@@ -559,6 +565,10 @@ Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Co
 * `ENABLE_DYNAMIC_PLAYLISTS`
   * **Standard:** `false`
   * **Beschreibung:** Bei `true` wird der `ARTIST`-Tag aus den Videometadaten automatisch als Playlist-Name genutzt.
+
+* `ADD_START_TIME_TO_DESCRIPTION`
+  * **Standard:** `true`
+  * **Beschreibung:** Stellt der Beschreibung die Startzeit aus dem `RECORDING_START`-Tag der Datei voran (schreibt tw-recorder ab 1.8.0) (`Aufnahmestart: 01.10.2026 22:15 CEST`, Zeitzone per `TZ`). Dateien ohne dieses Tag (z.B. yt-dlp-Downloads) bleiben unverändert. Bei gesplitteten Videos bekommt jeder Teil seine eigene Startzeit. Die Startzeit geht außerdem immer als `recordingDate` an YouTube, das dort aber nur das Datum anzeigt.
 
 * `TZ`
   * **Standard:** `UTC`
