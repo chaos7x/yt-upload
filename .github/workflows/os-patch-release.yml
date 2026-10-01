@@ -8,9 +8,17 @@ name: Automated OS-Patch Release
 # auf ihrem Build-Zeitpunkt ein - wer die pinnt, bekommt diese Patches
 # nie. Falls der Trockenlauf etwas findet: haengt eine vierte
 # Versionsstelle an den letzten Tag an (vX.Y.Z -> vX.Y.Z.1, danach
-# vX.Y.Z.2, ...) und pusht Version+Tag - das triggert docker-release.yml
-# wie jeden anderen Tag-Push (baut, published nach GHCR, erstellt das
-# GitHub-Release ganz normal mit).
+# vX.Y.Z.2, ...), setzt diesen Tag auf den aktuellen main-Commit und
+# startet docker-release.yml per workflow_dispatch fuer genau diesen Tag
+# (baut, published nach GHCR, erstellt das GitHub-Release ganz normal mit).
+#
+# Bewusst KEIN Commit/Push nach main: main ist per Ruleset geschuetzt
+# (nur ueber PR mit gruenen Checks), ein direkter Push wird abgelehnt.
+# pyproject.toml bleibt deshalb auf vX.Y.Z - passt auch inhaltlich, der
+# Code ist ja unveraendert, nur das Basis-Image ist neuer.
+# Bewusst workflow_dispatch statt sich auf den Tag-Push zu verlassen:
+# Pushes mit dem GITHUB_TOKEN loesen keine anderen Workflows aus, ein
+# reiner Tag-Push wuerde docker-release.yml also nie starten.
 #
 # Die vierte Stelle ist ausschliesslich fuer diese rein OS-Patch-
 # getriebenen Releases reserviert (siehe README.md, Abschnitt
@@ -30,6 +38,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   check-and-tag:
@@ -67,7 +76,10 @@ jobs:
         id: bump
         if: steps.check-debian.outputs.has_updates == 'true' || steps.check-alpine.outputs.has_updates == 'true'
         run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0)
+          # Hoechster Tag in main statt `git describe`: der neue OS-Patch-Tag
+          # liegt auf demselben Commit wie vX.Y.Z, describe waere dann
+          # mehrdeutig.
+          LATEST_TAG=$(git tag --merged HEAD --sort=-v:refname | head -1)
           CLEAN_TAG="${LATEST_TAG#v}"
           IFS='.' read -r MAJOR MINOR REST <<< "$CLEAN_TAG"
           PATCH=$(echo "$REST" | cut -d. -f1)
@@ -82,17 +94,16 @@ jobs:
           echo "new_tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: pyproject.toml aktualisieren, committen und taggen
+      - name: Tag setzen und docker-release.yml starten
         if: steps.check-debian.outputs.has_updates == 'true' || steps.check-alpine.outputs.has_updates == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          sed -i "s/^version = \".*\"/version = \"${{ steps.bump.outputs.new_version }}\"/" pyproject.toml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml
-          git commit -m "Automated OS-patch release ${{ steps.bump.outputs.new_tag }}"
           git tag "${{ steps.bump.outputs.new_tag }}"
-          git push origin HEAD:main
           git push origin "${{ steps.bump.outputs.new_tag }}"
+          gh workflow run docker-release.yml \
+            --ref "${{ steps.bump.outputs.new_tag }}" \
+            -f version="${{ steps.bump.outputs.new_tag }}"
 
       - name: Kein Patch noetig
         if: steps.check-debian.outputs.has_updates != 'true' && steps.check-alpine.outputs.has_updates != 'true'
