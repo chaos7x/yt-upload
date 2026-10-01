@@ -3,3 +3,6 @@ oauth/
 *.log
 videos/
 .git
+tests/
+.github/
+**/__pycache__/

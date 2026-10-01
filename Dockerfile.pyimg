@@ -13,7 +13,7 @@ FROM mwader/static-ffmpeg:latest AS ffmpeg-binaries
 # hier gewünscht), aber pip/setuptools UND die Build-Toolchain sollen trotzdem
 # nicht im Laufzeit-Image landen. --target sammelt daher alle Pakete (eigenes
 # Package + requests + deren jeweilige Abhängigkeiten) flach in
-# einem Ordner, den die Final-Stage gezielt übernimmt (siehe LAYER 3 dort).
+# einem Ordner, aus dem unten gezielt nach /rootfs übernommen wird.
 FROM python:3-slim AS builder
 
 WORKDIR /build
@@ -22,7 +22,31 @@ COPY src/ /build/src/
 # "." installiert das eigene Package UND requests in einem
 # Rutsch, direkt aus den in pyproject.toml deklarierten Dependencies - keine
 # doppelte Pflege der Paketnamen an zwei Stellen.
-RUN pip install --no-cache-dir --break-system-packages --target=/install .
+#
+# /rootfs: alles, was die Final-Stage aus dem Repo/Builder braucht, wird hier
+# bereits im späteren Ziel-Layout zusammengestellt, damit die Final-Stage es
+# mit EINEM einzigen COPY (= einem Layer) statt einem Layer pro Datei übernimmt.
+# Die Zielverzeichnisse werden dabei VORHER per mkdir angelegt: COPY --chmod
+# würde fehlende Elternverzeichnisse sonst mit demselben Modus anlegen, und
+# COPY /rootfs/ / überträgt Verzeichnis-Modi auf das Ziel.
+# Gezielt einzeln statt das komplette /install-Verzeichnis zu übernehmen,
+# damit nur tatsächlich genutzte Pakete im Laufzeit-Image landen. get_token
+# hat kein eigenes dist-info (gehört zum yt-upload-Package); die bare
+# get_token-Datei kommt zusätzlich unten per COPY - eigenständig vom
+# yt_upload-Package, wie im Debian-/Alpine-Image.
+RUN pip install --no-cache-dir --break-system-packages --target=/install . \
+    && mkdir -p /rootfs/usr/local/bin /rootfs/usr/local/lib/yt-upload /rootfs/etc/yt-upload \
+    && mv /install/bin/yt-upload /install/bin/get-token /rootfs/usr/local/bin/ \
+    && mv /install/get_token /rootfs/usr/local/lib/yt-upload/ \
+    && for pkg in yt_upload requests urllib3 idna certifi charset_normalizer; do \
+        mv /install/$pkg /rootfs/usr/local/lib/yt-upload/ \
+        && mv /install/$pkg-*.dist-info /rootfs/usr/local/lib/yt-upload/$pkg.dist-info \
+        || exit 1; \
+    done
+COPY --chmod=755 src/get_token/get_token.py /rootfs/usr/local/bin/get_token
+COPY --chmod=755 entrypoint.sh /rootfs/usr/local/bin/entrypoint.sh
+COPY bashrc /rootfs/etc/global.bashrc
+COPY upload.conf.example /rootfs/etc/yt-upload/upload.conf
 
 # ==========================================
 # STUFE 2: FINAL STAGE (Schlankes Laufzeit-Image, kein pip/setuptools)
@@ -32,97 +56,70 @@ FROM python:3-slim
 # ------------------------------------------
 # LAYER 1: FFmpeg Binaries aus STUFE 0 kopieren
 # ------------------------------------------
-COPY --from=ffmpeg-binaries /ffmpeg /usr/local/bin/ffmpeg
-COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/ffprobe
+# Bewusst ein eigener Layer VOR allem anderen: die Binaries ändern sich nur
+# mit dem mwader-Image, nicht mit jedem Release - der (große) Layer bleibt
+# so über Releases hinweg identisch und wird beim Pull nicht neu geladen.
+COPY --from=ffmpeg-binaries /ffmpeg /ffprobe /usr/local/bin/
 
-# ==========================================
-# LAYER 2: System-Tools & C-Bibliotheken über apt
-# ==========================================
-# Installiert ExifTool, Midnight Commander (mc)
-# sowie ca-certificates direkt über den Paketmanager. Bewusst OHNE pip/
-# setuptools - die werden nur im Builder (STUFE 1) gebraucht.
+# Arbeitsverzeichnis & Umgebung setzen
+WORKDIR /app
+ENV HOME=/app \
+    PYTHONPATH=/usr/local/lib/yt-upload
+
+# ------------------------------------------
+# LAYER 2: System-Pakete, User, Verzeichnisse & Symlinks in EINEM Rutsch
+# ------------------------------------------
+# Ein einziges RUN statt mehrerer = ein Layer statt fünf.
+#
+# Pakete: Midnight Commander (mc) sowie ca-certificates direkt über den
+# Paketmanager. Bewusst OHNE pip/setuptools - die werden nur im Builder
+# (STUFE 1) gebraucht.
 # apt-get upgrade: das Base-Image selbst hinkt Debians eigenen Security-
 # Patches oft ein paar Tage hinterher, bis die Docker-Official-Images-
 # Pipeline es neu baut - ein simples `docker pull` holt dann weiterhin die
 # alte, unpatchte Version. apt-get upgrade zieht stattdessen bei jedem
 # Build die aktuell in Debians eigenen Repos verfügbaren Paketversionen.
+#
+# Non-Root-User: Gehärtetes Image, laeuft standardmaessig nicht als root,
+# auch wenn beim Deploy kein `user:`/`-u` gesetzt wird. UID/GID bewusst NICHT
+# fest kodiert - useradd/groupadd (statt adduser, das im -slim-Base-Image
+# fehlt und den Build mit "exit code: 127" scheitern liess) waehlen
+# automatisch eine freie System-UID <1000. Wer die UID an sein eigenes Setup
+# anpassen will (z.B. fuer Bind-Mount-Rechte), ueberschreibt sie ganz normal
+# per `docker run -u`/Compose `user:` - die 1777-Verzeichnisse bleiben davon
+# unabhaengig fuer jede UID beschreibbar.
+#
+# 1777 statt 777: die Laufzeit-UID ist unbekannt (frei wählbar via `docker run -u`,
+# um Berechtigungskonflikte mit host-gemounteten Verzeichnissen zu vermeiden),
+# daher müssen die Verzeichnisse für jede UID beschreibbar bleiben. Das
+# Sticky-Bit (wie bei /tmp) verhindert aber, dass ein Prozess/Nutzer Dateien
+# löschen oder umbenennen kann, die ein anderer angelegt hat.
+#
+# /app gehoert dem dedizierten User statt root, damit HOME=/app (siehe oben)
+# fuer ihn tatsaechlich beschreibbar ist.
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     libcom-err2 \
     mc \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# ------------------------------------------
-# LAYER 2b: Dedizierter Non-Root-User
-# ------------------------------------------
-# Gehärtetes Image: laeuft standardmaessig nicht als root, auch wenn beim
-# Deploy kein `user:`/`-u` gesetzt wird. UID/GID bewusst NICHT fest kodiert -
-# useradd/groupadd (statt adduser, das im -slim-Base-Image fehlt und den
-# Build mit "exit code: 127" scheitern liess) waehlen automatisch eine freie
-# System-UID <1000. Wer die UID an sein eigenes Setup anpassen will (z.B.
-# fuer Bind-Mount-Rechte), ueberschreibt sie ganz normal per `docker run -u`/
-# Compose `user:` - die 1777-Verzeichnisse unten bleiben davon unabhaengig
-# fuer jede UID beschreibbar.
-RUN groupadd --system yt-upload \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system yt-upload \
     && useradd --system --no-create-home --home /nonexistent \
-        --shell /usr/sbin/nologin --gid yt-upload yt-upload
-
-# Arbeitsverzeichnis & Home-Variable setzen
-WORKDIR /app
-ENV HOME=/app
-
-# ------------------------------------------
-# LAYER 3: yt_upload-Package + Python-Abhängigkeiten aus dem Builder übernehmen
-# ------------------------------------------
-# Gezielt einzeln statt das komplette /install-Verzeichnis zu übernehmen,
-# damit nur tatsächlich genutzte Pakete im Laufzeit-Image landen. get_token wird bewusst NICHT aus
-# dem Builder übernommen (siehe LAYER 5 - eigenständiger Bare-Datei-Kopie
-# statt des pip-Installs, damit es unabhängig vom yt_upload-Package bleibt).
-COPY --from=builder /install/bin/yt-upload /usr/local/bin/yt-upload
-COPY --from=builder /install/bin/get-token /usr/local/bin/get-token
-COPY --from=builder /install/yt_upload /usr/local/lib/yt-upload/yt_upload
-COPY --from=builder /install/yt_upload-*.dist-info /usr/local/lib/yt-upload/yt_upload.dist-info
-COPY --from=builder /install/get_token /usr/local/lib/yt-upload/get_token
-COPY --from=builder /install/requests /usr/local/lib/yt-upload/requests
-COPY --from=builder /install/requests-*.dist-info /usr/local/lib/yt-upload/requests.dist-info
-COPY --from=builder /install/urllib3 /usr/local/lib/yt-upload/urllib3
-COPY --from=builder /install/urllib3-*.dist-info /usr/local/lib/yt-upload/urllib3.dist-info
-COPY --from=builder /install/idna /usr/local/lib/yt-upload/idna
-COPY --from=builder /install/idna-*.dist-info /usr/local/lib/yt-upload/idna.dist-info
-COPY --from=builder /install/certifi /usr/local/lib/yt-upload/certifi
-COPY --from=builder /install/certifi-*.dist-info /usr/local/lib/yt-upload/certifi.dist-info
-COPY --from=builder /install/charset_normalizer /usr/local/lib/yt-upload/charset_normalizer
-COPY --from=builder /install/charset_normalizer-*.dist-info /usr/local/lib/yt-upload/charset_normalizer.dist-info
-ENV PYTHONPATH=/usr/local/lib/yt-upload
+        --shell /usr/sbin/nologin --gid yt-upload yt-upload \
+    && mkdir -p /log /etc/yt-upload/conf.d /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry \
+    && chmod 1777 /log /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry \
+    && ln -s /etc/global.bashrc /tmp/.bashrc \
+    && ln -s /etc/global.bashrc /app/.bashrc \
+    && chown yt-upload:yt-upload /app
 
 # ------------------------------------------
-# LAYER 4: Daten- & Log-Verzeichnisse anlegen
+# LAYER 3: Packages, Skripte & Configs aus dem Builder übernehmen
 # ------------------------------------------
-# 1777 statt 777: die Laufzeit-UID ist unbekannt (frei wählbar via `docker run -u`,
-# um Berechtigungskonflikte mit host-gemounteten Verzeichnissen zu vermeiden),
-# daher müssen beide Verzeichnisse für jede UID beschreibbar bleiben. Das
-# Sticky-Bit (wie bei /tmp) verhindert aber, dass ein Prozess/Nutzer Dateien
-# löschen oder umbenennen kann, die ein anderer angelegt hat.
-RUN mkdir -p /log /etc/yt-upload/conf.d /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry \
-    && chmod 1777 /log /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry
+# yt_upload + requests samt Abhängigkeiten, Entry-Points, get_token,
+# entrypoint.sh, bashrc und upload.conf liegen in /rootfs (STUFE 1) bereits
+# im Ziel-Layout - ein COPY, ein Layer. Steht bewusst NACH dem RUN oben,
+# damit eine reine Code-Änderung den Paket-Layer aus dem Cache weiterverwendet.
+COPY --from=builder /rootfs/ /
 
-# ------------------------------------------
-# LAYER 5: Lokale Skripte & Configs kopieren
-# ------------------------------------------
-COPY bashrc /etc/global.bashrc
-COPY --chmod=755 src/get_token/get_token.py /usr/local/bin/get_token
-COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY upload.conf.example /etc/yt-upload/upload.conf
-
-# ------------------------------------------
-# LAYER 6: Symlinks anlegen
-# ------------------------------------------
-RUN ln -s /etc/global.bashrc /tmp/.bashrc \
-    && ln -s /etc/global.bashrc /app/.bashrc
-
-# /app gehoert dem dedizierten User statt root, damit HOME=/app (siehe oben)
-# fuer ihn tatsaechlich beschreibbar ist.
-RUN chown yt-upload:yt-upload /app
 USER yt-upload
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
@@ -133,7 +130,7 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 ARG VERSION
 ARG BUILD_DATE
 
-LABEL version="${VERSION}"
-LABEL build_date="${BUILD_DATE}"
-LABEL maintainer="Chaos7x"
-LABEL purpose="YouTube upload automation with ffmpeg + python"
+LABEL version="${VERSION}" \
+      build_date="${BUILD_DATE}" \
+      maintainer="Chaos7x" \
+      purpose="YouTube upload automation with ffmpeg + python"
