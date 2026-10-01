@@ -6,7 +6,7 @@ Sanitizing und Zensur.
 import logging
 import re
 import unicodedata
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from yt_upload import config
 
@@ -88,6 +88,51 @@ def normalize_recording_date(value):
         return parsed.isoformat().replace("+00:00", "Z")
 
     return value
+
+
+def parse_creation_time(value):
+    """
+    Wandelt einen Container-Zeitstempel (ffprobe-Tag creation_time, z.B.
+    "2026-10-01T20:15:00.000000Z") in ein UTC-datetime um. Ohne Zeitzone
+    wird UTC angenommen. Gibt None zurück, wenn der Wert fehlt, nicht
+    parsebar ist oder nur ein Datum ohne Uhrzeit trägt (exakt 00:00:00) -
+    ältere tw-recorder-Dateien schreiben z.B. nur YYYYMMDD, was ffprobe als
+    Mitternacht ausgibt und keine echte Startzeit ist.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    parsed = parsed.astimezone(UTC)
+    if (parsed.hour, parsed.minute, parsed.second, parsed.microsecond) == (0, 0, 0, 0):
+        return None
+    return parsed.replace(microsecond=0)
+
+
+def segment_start_time(start, segment_index):
+    """Startzeit von Segment segment_index (0-basiert) bei Splitting nach config.SEGMENT_TIME_SEC."""
+    if start is None:
+        return None
+    return start + timedelta(seconds=segment_index * config.SEGMENT_TIME_SEC)
+
+
+def format_recording_datetime(start):
+    """ISO-8601-UTC-Format für recordingDetails.recordingDate (z.B. 2026-10-01T20:15:00Z)."""
+    return start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def format_start_time_line(start):
+    """
+    Beschreibungszeile mit der Startzeit, in der lokalen Zeitzone des
+    Prozesses (TZ-Variable; im Container ohne TZ also UTC), z.B.
+    "Aufnahmestart: 01.10.2026 22:15 CEST".
+    """
+    local = start.astimezone()
+    return f"Aufnahmestart: {local.strftime('%d.%m.%Y %H:%M')} {local.tzname() or 'UTC'}"
 
 
 def sanitize_text(text):

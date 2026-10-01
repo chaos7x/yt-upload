@@ -31,6 +31,12 @@
 # Erstellt/Ermittelt automatisch Playlists basierend auf dem 'ARTIST'-Tag (true/false)
 #enable_dynamic_playlists = false
 
+# Startzeit aus dem creation_time-Tag der Datei (z.B. von tw-recorder) als
+# Zeile "Aufnahmestart: TT.MM.JJJJ HH:MM <Zone>" der Beschreibung voranstellen.
+# Zeitzone über die TZ-Umgebungsvariable (ohne TZ: UTC). Unabhängig davon wird
+# die Startzeit als recordingDate an YouTube übergeben. (true/false)
+#add_start_time_to_description = true
+
 # Standard-Sichtbarkeit für hochgeladene Videos (public, private, unlisted)
 #privacy_status = unlisted
 

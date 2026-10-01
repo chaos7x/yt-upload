@@ -169,6 +169,8 @@ AUTO_THUMB_MIN_SEC = 15
 AUTO_THUMB_MAX_SEC = 120
 ALLOW_OVERWRITE = True
 DYNAMIC_PLAYLISTS = False
+# Startzeit aus dem creation_time-Tag als Zeile "Aufnahmestart: ..." der Beschreibung voranstellen
+ADD_START_TIME_TO_DESCRIPTION = True
 
 # Laufzeit-Variablen für Hot-Reload und Zensur-Einstellungen
 CURRENT_CONFIG_HASH = ""
@@ -194,6 +196,7 @@ def load_configuration(log_changes=False):
     global DEFAULT_DESCRIPTION, DEFAULT_TAGS, DEFAULT_CATEGORY, VIDEO_PRIVACY
     global VIDEO_LANGUAGE, ALLOW_EMBEDDING, PLAYLIST_NAME, AUTO_GENERATE_THUMBNAIL
     global AUTO_THUMB_MIN_SEC, AUTO_THUMB_MAX_SEC, ALLOW_OVERWRITE, DYNAMIC_PLAYLISTS
+    global ADD_START_TIME_TO_DESCRIPTION
     global CURRENT_CONFIG_HASH
     global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST
     global LOG_FILE_EXPLICIT
@@ -220,6 +223,7 @@ def load_configuration(log_changes=False):
     allow_overwrite = ALLOW_OVERWRITE
     enable_description_censor = ENABLE_DESCRIPTION_CENSOR
     dynamic_playlists = DYNAMIC_PLAYLISTS
+    add_start_time_to_description = ADD_START_TIME_TO_DESCRIPTION
 
     combined_blacklist = set(DESCRIPTION_BLACKLIST) if DESCRIPTION_BLACKLIST else set()
 
@@ -312,6 +316,9 @@ def load_configuration(log_changes=False):
             allow_overwrite = config.getboolean('settings', 'allow_overwrite', fallback=allow_overwrite)
             enable_description_censor = config.getboolean('settings', 'enable_description_censor', fallback=enable_description_censor)
             dynamic_playlists = config.getboolean('settings', 'enable_dynamic_playlists', fallback=dynamic_playlists)
+            add_start_time_to_description = config.getboolean(
+                'settings', 'add_start_time_to_description', fallback=add_start_time_to_description
+            )
 
         # Sektion [blacklist] einlesen
         if 'blacklist' in config:
@@ -344,6 +351,11 @@ def load_configuration(log_changes=False):
         DYNAMIC_PLAYLISTS = os.environ['ENABLE_DYNAMIC_PLAYLISTS'].lower() in ('1', 'true', 'yes')
     else:
         DYNAMIC_PLAYLISTS = dynamic_playlists
+
+    if 'ADD_START_TIME_TO_DESCRIPTION' in os.environ:
+        ADD_START_TIME_TO_DESCRIPTION = os.environ['ADD_START_TIME_TO_DESCRIPTION'].lower() in ('1', 'true', 'yes')
+    else:
+        ADD_START_TIME_TO_DESCRIPTION = add_start_time_to_description
 
     if 'ENABLE_DESCRIPTION_CENSOR' in os.environ:
         ENABLE_DESCRIPTION_CENSOR = os.environ['ENABLE_DESCRIPTION_CENSOR'].lower() in ('1', 'true', 'yes')

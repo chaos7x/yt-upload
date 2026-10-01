@@ -74,6 +74,7 @@ def extract_metadata_and_thumb(file_path):
         "purl": None,
         "genre": None,
         "date": None,
+        "creation_time": None,
         "artist": None,
         "thumb_path": None,
         "duration": 0,
@@ -106,6 +107,7 @@ def extract_metadata_and_thumb(file_path):
         metadata["purl"] = tags.get("purl")
         metadata["genre"] = tags.get("genre")
         metadata["date"] = tags.get("date")
+        metadata["creation_time"] = tags.get("creation_time")
         metadata["artist"] = sanitize_text(tags.get("artist") or tags.get("album_artist"))
 
     except (subprocess.SubprocessError, OSError, json.JSONDecodeError, KeyError, ValueError) as e:
