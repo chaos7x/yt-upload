@@ -34,6 +34,28 @@ CHUNK_UNIT_BYTES = 262144    # 256 KiB Basis-Einheit für Resumable Chunk Upload
 DEFAULT_CHUNKSIZE = 268435456  # 256 MiB Standard-Chunkgröße für den Upload (--chunksize)
 
 
+_conf_d_warned = False
+
+
+def _conf_d_files():
+    """
+    Sortierte *.conf aus CONF_D_DIR. Ist das Verzeichnis zwar vorhanden, aber
+    für den aufrufenden User nicht lesbar (Paket-Standard root:yt-upload 0750,
+    z.B. bei einem manuellen CLI-Aufruf als normaler User), liefert glob()
+    stillschweigend eine leere Liste - deshalb hier einmal pro Prozess eine
+    Warnung, statt conf.d unbemerkt zu ignorieren.
+    """
+    global _conf_d_warned
+    if not os.path.isdir(CONF_D_DIR):
+        return []
+    if not os.access(CONF_D_DIR, os.R_OK | os.X_OK):
+        if not _conf_d_warned:
+            logger.warning(f"{CONF_D_DIR} ist für diesen User nicht lesbar und wird übersprungen.")
+            _conf_d_warned = True
+        return []
+    return sorted(glob.glob(os.path.join(CONF_D_DIR, "*.conf")))
+
+
 def _is_dedicated_mount(path):
     """
     Prüft, ob path ein eigener Mountpoint ist (Docker-Volume/Bind-Mount) statt
@@ -235,8 +257,7 @@ def load_configuration(log_changes=False):
         config_files.append(CONF_PATH)
 
     # Scanne conf.d Verzeichnis nach weiteren .conf Dateien
-    if os.path.isdir(CONF_D_DIR):
-        config_files.extend(sorted(glob.glob(os.path.join(CONF_D_DIR, "*.conf"))))
+    config_files.extend(_conf_d_files())
 
     # --- Hash-Berechnung für Laufzeit-Erkennung von Änderungen ---
     hasher = hashlib.md5()
