@@ -75,6 +75,16 @@ pw groupshow media-pipeline >/dev/null 2>&1 || pw groupadd media-pipeline
 if ! pw usershow yt-upload >/dev/null 2>&1; then
     pw useradd yt-upload -c "yt-upload daemon" -d /nonexistent -s /usr/sbin/nologin -G media-pipeline
 fi
+# Config/conf.d legt das CLI-Paket an, bevor es den Dienstuser gibt - hier
+# auf root:yt-upload 0640/0750 nachziehen, solange noch Paket-Standard.
+conf=/etc/yt-upload/upload.conf
+if [ -f "$conf" ] && [ "$(stat -f '%Su:%Sg %Lp' "$conf")" = "root:wheel 644" ]; then
+    chown root:yt-upload "$conf" && chmod 0640 "$conf"
+fi
+confd=/etc/yt-upload/conf.d
+if [ -d "$confd" ] && [ "$(stat -f '%Su:%Sg %Lp' "$confd")" = "root:wheel 755" ]; then
+    chown root:yt-upload "$confd" && chmod 0750 "$confd"
+fi
 for dir in /srv/media-pipeline /srv/media-pipeline/recordings /srv/media-pipeline/incoming /srv/media-pipeline/work /srv/media-pipeline/done /srv/media-pipeline/corrupt /srv/media-pipeline/retry; do
     if [ ! -d "$dir" ]; then
         install -d -o root -g media-pipeline -m 2775 "$dir"

@@ -10,6 +10,22 @@ if ! getent passwd yt-upload >/dev/null 2>&1; then
         --shell /usr/sbin/nologin yt-upload
 fi
 
+# upload.conf/conf.d enthalten selbst keine Secrets, sollen aber nicht fuer
+# jeden lesbar sein (Pfade, Blacklist). Der Dienst muss die Config nur lesen, nie schreiben:
+# root:yt-upload 0640 fuer die Datei, 0750 fuer conf.d/ - einheitlich mit
+# tw-recorder. Nur angepasst, solange noch der Paket-Standard (root:root
+# 644/755) vorliegt, eigene Rechte des Admins bleiben bei Upgrades erhalten.
+conf=/etc/yt-upload/upload.conf
+if [ -f "$conf" ] && [ "$(stat -c '%U:%G %a' "$conf")" = "root:root 644" ]; then
+    chown root:yt-upload "$conf"
+    chmod 0640 "$conf"
+fi
+confd=/etc/yt-upload/conf.d
+if [ -d "$confd" ] && [ "$(stat -c '%U:%G %a' "$confd")" = "root:root 755" ]; then
+    chown root:yt-upload "$confd"
+    chmod 0750 "$confd"
+fi
+
 # Gemeinsame Gruppe fuer die Uebergabeverzeichnisse der Pipeline
 # (tw-recorder -> fetchbridge -> yt-upload). Jedes der drei .deb-Pakete legt
 # Gruppe und Verzeichnisse unabhaengig und idempotent an, da die Installationsreihenfolge
