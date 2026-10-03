@@ -265,9 +265,10 @@ Das Daemon-Paket legt den Systemuser und den systemd-Service an, startet ihn abe
 systemctl enable --now yt-upload
 ```
 
-**Devuan / Debian ohne systemd (`sysvinit-core`):** Das Daemon-Paket bringt zusätzlich ein klassisches `/etc/init.d/yt-upload`-Skript mit, das `daemon-postinst` automatisch anstelle des systemd-Service registriert, wenn kein systemd läuft:
+**Devuan / Debian ohne systemd (`sysvinit-core`, OpenRC):** Das Daemon-Paket bringt zusätzlich ein klassisches `/etc/init.d/yt-upload`-Skript mit, das `daemon-postinst` automatisch anstelle des systemd-Service registriert, wenn kein systemd läuft - ebenfalls deaktiviert (`update-rc.d … defaults-disabled`, kein Start beim Booten). Die mitgelieferte `.service`-Datei unter `/usr/lib/systemd/system/` bleibt dort einfach ungenutzt liegen, wie bei Debian-Paketen üblich. Aktivieren und starten:
 
 ```bash
+update-rc.d yt-upload enable
 service yt-upload start
 ```
 

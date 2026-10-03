@@ -51,10 +51,16 @@ chown yt-upload:yt-upload /var/log/yt-upload
 # mitgelieferte /etc/init.d/yt-upload per update-rc.d registriert - beide
 # Zweige schliessen sich damit gegenseitig aus, es wird nie beides parallel
 # verwaltet.
+# defaults-disabled statt defaults: "defaults" legt S-Links in rc2-5 an, der
+# Dienst wuerde also beim naechsten Boot automatisch starten - genau wie ein
+# `systemctl enable`, das der systemd-Zweig bewusst NICHT macht. Mit
+# defaults-disabled entstehen nur K-Links, aktiviert wird erst manuell per
+# `update-rc.d yt-upload enable`. Existieren bereits Links (Upgrade, oder vom
+# Admin aktiviert), aendert update-rc.d nichts daran.
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
 elif command -v update-rc.d >/dev/null 2>&1; then
-    update-rc.d yt-upload defaults >/dev/null
+    update-rc.d yt-upload defaults-disabled >/dev/null
 fi
 
 echo ""
@@ -65,6 +71,7 @@ echo ""
 if [ -d /run/systemd/system ]; then
     echo "    systemctl enable --now yt-upload"
 else
+    echo "    update-rc.d yt-upload enable"
     echo "    service yt-upload start"
 fi
 echo ""
