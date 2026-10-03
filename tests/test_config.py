@@ -165,3 +165,22 @@ class TestLoadConfigurationParsingErrors:
         assert config.DEFAULT_CATEGORY == "FromMain"
         assert config.DEFAULT_TAGS != "secret-tag"
         assert "secret.conf" in caplog.text
+
+
+class TestUseConfigFile:
+    def test_replaces_system_config_without_mixing(self, config, tmp_path, monkeypatch):
+        for var in ("VIDEO_PRIVACY", "DEFAULT_TAGS", "CONFIG_FILE"):
+            monkeypatch.delenv(var, raising=False)
+        system_conf = tmp_path / "system.conf"
+        system_conf.write_text("[settings]\nprivacy_status = public\n", encoding="utf-8")
+        own_conf = tmp_path / "own.conf"
+        own_conf.write_text("[settings]\ndefault_tags = Eigen\n", encoding="utf-8")
+        monkeypatch.setattr(config, "CONF_PATH", str(system_conf))
+        config.load_configuration()
+        assert config.VIDEO_PRIVACY == "public"
+
+        config.use_config_file(str(own_conf))
+
+        assert config.VIDEO_PRIVACY == "unlisted"  # Default, nicht aus der System-Config
+        assert config.DEFAULT_TAGS == "Eigen"
+        assert config.CONF_PATH == str(own_conf)

@@ -401,7 +401,7 @@ Alle drei Varianten lassen kein Build-Tooling (`pip`/`setuptools`, sofern nicht 
 
 ## 💻 CLI & Parameter Übersicht
 ```text
-yt-upload [-h] [-v] [-a] [-D] [--healthcheck] [--requeue-retries] [-t TITLE]
+yt-upload [-h] [-v] [-f PATH] [-a] [-D] [--healthcheck] [--requeue-retries] [-t TITLE]
           [--title-template TEMPLATE]
           [-d DESCRIPTION | --description-file PATH]
           [-c CATEGORY] [--tags TAGS] [--privacy {public,private,unlisted}]
@@ -416,6 +416,8 @@ yt-upload [-h] [-v] [-a] [-D] [--healthcheck] [--requeue-retries] [-t TITLE]
 
 ### Die Konfig-Datei `upload.conf`
 Unter `/etc/yt-upload/` befindet sich die `upload.conf`. Diese wird sowohl im Container als auch bei einer Bare-Metal-Installation gelesen. Für Snippets steht zusätzlich das `conf.d`-Verzeichnis zur Verfügung.
+
+Mit `-f`/`--config PATH` lässt sich stattdessen eine eigene Config-Datei angeben, z.B. für manuelle Uploads als normaler User (`yt-upload -f ~/yt-upload.conf video.mp4`). Sie *ersetzt* `upload.conf` und `conf.d` für diesen Aufruf komplett (nicht gemischt, nicht angegebene Werte fallen auf die eingebauten Defaults zurück), Umgebungsvariablen gelten weiterhin. Für einen eigenen Token als normaler User darin `credentials_file` unter `[paths]` setzen, da die System-Credentials-Datei nur für den `yt-upload`-User lesbar ist.
 
 ```ini
 # ==============================================================================
