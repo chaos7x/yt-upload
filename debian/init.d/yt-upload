@@ -13,7 +13,7 @@
 #                     gar nicht erst registriert (siehe daemon-postinst.sh).
 #                     Fuer den optionalen periodischen Retry-Requeue (SysV-
 #                     Pendant zu yt-upload-retry.timer) siehe
-#                     yt-upload-retry.cron.example.
+#                     /etc/cron.d/yt-upload-retry.
 ### END INIT INFO
 
 set -e
