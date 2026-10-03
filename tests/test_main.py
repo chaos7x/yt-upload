@@ -155,3 +155,10 @@ class TestResolveFileArgs:
         result = main_module._resolve_file_args(args, index=1, total=2)
 
         assert result.title == "Konzert [2/2]"
+
+
+class TestConfigOption:
+    def test_short_and_long_option(self, main_module):
+        assert main_module.parse_arguments(["-f", "x.conf", "video.mp4"]).config == "x.conf"
+        assert main_module.parse_arguments(["--config", "y.conf", "video.mp4"]).config == "y.conf"
+        assert main_module.parse_arguments(["video.mp4"]).config is None

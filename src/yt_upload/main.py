@@ -57,6 +57,11 @@ def parse_arguments(argv=None):
         help="Pfad(e) zur/zu den hochzuladenden Videodatei(en) (im manuellen Modus). Bei mehreren "
              "Dateien werden diese nacheinander mit denselben Metadaten hochgeladen (siehe --title-template)."
     )
+    parser.add_argument(
+        "-f", "--config", metavar="PATH", default=None,
+        help="Eigene Config-Datei statt /etc/yt-upload/upload.conf + conf.d (nicht damit gemischt, "
+             "Umgebungsvariablen gelten weiterhin). Standard: System-Config"
+    )
     parser.add_argument("-a", "--auto", action="store_true", help="Automatischer Batch-Modus für ein Verzeichnis")
     parser.add_argument("-D", "--daemon", action="store_true", help="Dämon-Modus: Dauerhafte inotify-Verzeichnisüberwachung (benötigt zusätzlich das Paket yt-upload-daemon)")
     parser.add_argument("--healthcheck", action="store_true", help="Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort (für Docker HEALTHCHECK)")
@@ -155,7 +160,12 @@ def main():
         print("\nNutze -h oder --help für alle Optionen.")
         return
 
-    config.load_configuration(log_changes=False)
+    if args.config:
+        if not os.path.isfile(args.config):
+            sys.exit(f"Config-Datei nicht gefunden: {args.config}")
+        config.use_config_file(args.config)
+    else:
+        config.load_configuration(log_changes=False)
 
     # --requeue-retries ist ein eigener, kurzlebiger Modus (wie --healthcheck)
     # ohne Instanz-Lock/Datei-Upload-Logik: er verschiebt nur Dateien zwischen

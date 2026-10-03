@@ -9,6 +9,7 @@ Import eingefrorenen Kopie.
 """
 
 import configparser
+import copy
 import glob
 import hashlib
 import logging
@@ -376,6 +377,27 @@ def load_configuration(log_changes=False):
     AUTO_THUMB_MIN_SEC = auto_thumb_min_sec
     AUTO_THUMB_MAX_SEC = auto_thumb_max_sec
     ALLOW_OVERWRITE = allow_overwrite
+
+
+# Hardcoded-Defaults vor dem ersten Laden festhalten, damit use_config_file()
+# eine eigene Config ohne Reste der System-Config laden kann - load_configuration()
+# startet sonst immer von den aktuellen Werten (Hot-Reload-Semantik).
+_DEFAULTS = copy.deepcopy({name: value for name, value in globals().items() if name.isupper()})
+
+
+def use_config_file(path):
+    """
+    -f/--config: Ersetzt die System-Config (upload.conf + conf.d) für diesen
+    Prozess durch genau eine eigene Datei. Alle Werte gehen zuerst auf die
+    Hardcoded-Defaults zurück, die System-Config wird also nicht mit der
+    eigenen gemischt; Umgebungsvariablen gelten weiterhin. Auch ein späterer
+    Hot-Reload (Dämon) liest danach nur noch diese Datei.
+    """
+    global CONF_PATH, CONF_D_DIR
+    globals().update(copy.deepcopy(_DEFAULTS))
+    CONF_PATH = path
+    CONF_D_DIR = ""
+    load_configuration(log_changes=False)
 
 
 # Initiales Laden beim Scriptstart ausführen
