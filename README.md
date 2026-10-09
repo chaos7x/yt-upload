@@ -86,6 +86,8 @@ Läuft `get-token` dagegen auf demselben Rechner wie dein Browser (z. B. Bare-Me
 OAUTH_LOCAL_SERVER=true get-token
 ```
 
+**Welcher YouTube-Kanal?** Den Ziel-Kanal bestimmt allein der Login in diesem Schritt, nicht die `client_secrets.json`: Client-ID, Project-ID und Secret identifizieren nur deine App (das Google-Cloud-Projekt). Melde dich mit dem Google-Konto an, dem der Kanal gehört; hat das Konto mehrere Kanäle (Brand-Accounts), fragt Google dabei, welcher verwendet werden soll. Der erzeugte Refresh-Token ist an genau diesen Kanal gebunden, alle Uploads und Playlists landen dort. Das Konto, dem das Cloud-Projekt gehört, darf ein anderes sein (im Testmodus muss das Kanal-Konto dann als Testnutzer eingetragen sein). Zum Kanalwechsel `get-token` einfach erneut ausführen und beim Login den anderen Kanal wählen.
+
 ### 4. Starten via Docker CLI
 ```bash
 docker run -d \
