@@ -49,6 +49,26 @@ Hinterlege deine Google OAuth Secrets unter `oauth/client_secrets.json`. Eine Be
 }
 ```
 
+Am einfachsten musst du die Platzhalter gar nicht von Hand ersetzen: Die Google Cloud Console bietet genau diese Datei fertig zum Download an (Schritte unten). Die Werte bedeuten:
+
+| Platzhalter | Was es ist | Wo du es findest |
+|---|---|---|
+| `DEINE_CLIENT_ID` | Die öffentliche Kennung deines OAuth-Clients. Der vollständige Wert endet immer auf `.apps.googleusercontent.com` (z. B. `123456789012-abc…xyz.apps.googleusercontent.com`) - diesen Teil also nicht doppelt anhängen. | *Google Auth Platform → Clients* (bzw. *APIs & Dienste → Anmeldedaten*), Spalte „Client-ID“ deines Desktop-Clients |
+| `DEIN_PROJECT_ID` | Die ID deines Google-Cloud-Projekts (z. B. `yt-upload-123456`), nicht der Anzeigename. Rein informativ: `get-token` und `yt-upload` lesen das Feld nicht aus, es darf also auch fehlen. | Projektauswahl oben in der Console bzw. *IAM & Verwaltung → Einstellungen* |
+| `DEIN_CLIENT_SECRET` | Das Geheimnis zum OAuth-Client (beginnt meist mit `GOCSPX-`). Damit tauscht `get-token` den Login-Code gegen den Refresh-Token und `yt-upload` später den Refresh-Token gegen kurzlebige Access-Tokens. | Wird beim Anlegen des Clients angezeigt und steckt in der heruntergeladenen JSON-Datei. Neuere Clients zeigen das Secret danach nicht mehr vollständig an - dann unter dem Client ein neues Secret hinzufügen. |
+
+Die übrigen Felder (`auth_uri`, `token_uri`, `auth_provider_x509_cert_url`, `redirect_uris`) sind für alle Nutzer gleich und bleiben wie in der Vorlage.
+
+**Einmalige Einrichtung in der [Google Cloud Console](https://console.cloud.google.com/):**
+
+1. Projekt anlegen oder ein vorhandenes auswählen.
+2. Unter *APIs & Dienste → Bibliothek* die **YouTube Data API v3** aktivieren.
+3. Unter *Google Auth Platform* (früher *OAuth-Zustimmungsbildschirm*) die App einrichten: Zielgruppe **Extern**, App-Name und Support-Mail eintragen. Solange die App im Status **Testen** ist, das Google-Konto des YouTube-Kanals als Testnutzer hinzufügen - Achtung: im Testmodus läuft der Refresh-Token nach 7 Tagen ab und `get-token` muss neu laufen. Für Dauerbetrieb die App auf **In Produktion** stellen (für die private Nutzung genügt das ohne Google-Verifizierung; beim Login erscheint dann einmalig der Hinweis „Google hat diese App nicht überprüft“, den du über *Erweitert → Weiter zu …* bestätigst).
+4. Unter *Clients* (bzw. *Anmeldedaten → Anmeldedaten erstellen → OAuth-Client-ID*) einen Client vom Typ **Desktop-App** anlegen. Nicht „Webanwendung“: Nur Desktop-Clients akzeptieren den Redirect auf `http://localhost`, den `get-token` verwendet, ohne dass du Redirect-URIs eintragen musst.
+5. Direkt im Anschluss **JSON herunterladen** und als `client_secrets.json` speichern (Docker: `oauth/client_secrets.json`, Bare-Metal: `/etc/yt-upload/client_secrets.json`). Die Datei hat bereits das obige Format mit `"installed": {…}`.
+
+Die Scopes (`youtube.upload` und `youtube`, letzterer für die Playlist-Verwaltung) fordert `get-token` selbst an; in der Console musst du dafür nichts eintragen. Die `client_secrets.json` gehört nicht in ein Git-Repo oder Image. Client-ID und Secret landen von `get-token` zusätzlich in der erzeugten Credentials-Datei, daher gilt der Schutz per `systemd-creds` (siehe [unten](#-optional-credentials-mit-systemd-creds-verschlüsseln-nur-dämondeb-paket)) für beide.
+
 ### 3. OAuth-Token generieren
 Führe das mitgelieferte Authentifizierungsskript im Container aus:
 
@@ -65,6 +85,8 @@ Läuft `get-token` dagegen auf demselben Rechner wie dein Browser (z. B. Bare-Me
 ```bash
 OAUTH_LOCAL_SERVER=true get-token
 ```
+
+**Welcher YouTube-Kanal?** Den Ziel-Kanal bestimmt allein der Login in diesem Schritt, nicht die `client_secrets.json`: Client-ID, Project-ID und Secret identifizieren nur deine App (das Google-Cloud-Projekt). Melde dich mit dem Google-Konto an, dem der Kanal gehört; hat das Konto mehrere Kanäle (Brand-Accounts), fragt Google dabei, welcher verwendet werden soll. Der erzeugte Refresh-Token ist an genau diesen Kanal gebunden, alle Uploads und Playlists landen dort. Das Konto, dem das Cloud-Projekt gehört, darf ein anderes sein (im Testmodus muss das Kanal-Konto dann als Testnutzer eingetragen sein). Zum Kanalwechsel `get-token` einfach erneut ausführen und beim Login den anderen Kanal wählen.
 
 ### 4. Starten via Docker CLI
 ```bash
