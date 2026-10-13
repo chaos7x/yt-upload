@@ -209,7 +209,7 @@ jobs:
             --maintainer "chaos7x" \
             --description "Automatisierter YouTube Upload Workflow (CLI)" \
             --url "https://github.com/${{ github.repository }}" \
-            --depends python3 \
+            --depends "python3 (>= 3.11)" \
             --depends python3-requests \
             --depends ffmpeg \
             --config-files /etc/yt-upload/upload.conf \
@@ -250,3 +250,18 @@ jobs:
             *.pkg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: .debs zu Gemfury hochladen
+        env:
+          FURY_PUSH_TOKEN: ${{ secrets.FURY_PUSH_TOKEN }}
+        run: |
+          set -eu
+          for f in *.deb; do
+            code=$(curl -sS -o fury-resp.txt -w '%{http_code}' \
+              -u "$FURY_PUSH_TOKEN:" -F "package=@$f" https://push.fury.io/chaos7x/)
+            case "$code" in
+              2??) echo "$f hochgeladen" ;;
+              409) echo "::warning::$f ist bei Gemfury schon vorhanden" ;;
+              *)   cat fury-resp.txt; echo "::error::$f: HTTP $code"; exit 1 ;;
+            esac
+          done
