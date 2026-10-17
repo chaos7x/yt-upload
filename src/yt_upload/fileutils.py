@@ -36,9 +36,19 @@ def ensure_directories():
     """
     for d in [config.IN_DIR, config.WORK_DIR, config.DONE_DIR, config.CORRUPT_DIR, config.RETRY_DIR]:
         try:
-            newly_created = not os.path.isdir(d)
-            os.makedirs(d, exist_ok=True)
-            if newly_created:
+            if os.path.isdir(d):
+                continue
+            # g+w über ein Umask von 002 beim makedirs() selbst, Setgid erbt
+            # das neue Verzeichnis vom Elternverzeichnis: ein chmod(0o2775)
+            # allein scheitert unter der systemd-Unit (RestrictSUIDSGID=true
+            # lehnt jedes chmod() mit Setgid-Bit per seccomp mit EPERM ab),
+            # das Verzeichnis bliebe auf 2755. chmod daher nur als Fallback.
+            old_umask = os.umask(0o002)
+            try:
+                os.makedirs(d, exist_ok=True)
+            finally:
+                os.umask(old_umask)
+            if (os.stat(d).st_mode & 0o7777) != 0o2775:
                 try:
                     os.chmod(d, 0o2775)
                 except OSError as e:
