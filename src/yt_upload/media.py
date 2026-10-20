@@ -63,6 +63,25 @@ def is_file_ready_and_valid(file_path, wait_interval=5, max_checks=180):
     return True
 
 
+def _find_image_attachment(streams):
+    """
+    Liefert den Stream-Index des besten Bild-Attachments (codec_type
+    "attachment" mit image/*-Mimetype) oder None. Ein Attachment namens
+    "cover.*" (yt-dlp --embed-thumbnail) hat Vorrang vor anderen Bildern.
+    """
+    candidates = []
+    for stream in streams:
+        if stream.get("codec_type") != "attachment":
+            continue
+        tags = {str(k).lower(): str(v) for k, v in stream.get("tags", {}).items()}
+        if not tags.get("mimetype", "").lower().startswith("image/"):
+            continue
+        is_cover = tags.get("filename", "").lower().startswith("cover")
+        candidates.append((not is_cover, stream.get("index")))
+    candidates = [c for c in candidates if c[1] is not None]
+    return min(candidates)[1] if candidates else None
+
+
 def extract_metadata_and_thumb(file_path):
     """
     Extrahiert eingebettete Tags (Titel, Beschreibung, Künstler etc.) via ffprobe
@@ -79,6 +98,7 @@ def extract_metadata_and_thumb(file_path):
         "thumb_path": None,
         "duration": 0,
     }
+    streams = []
 
     # Metadaten aus dem Container via FFprobe extrahieren
     try:
@@ -92,6 +112,7 @@ def extract_metadata_and_thumb(file_path):
         ]
         res = subprocess.run(cmd_probe, capture_output=True, text=True, check=True)
         probe_data = json.loads(res.stdout)
+        streams = probe_data.get("streams", [])
 
         format_info = probe_data.get("format", {})
         tags = {str(k).lower(): v for k, v in format_info.get("tags", {}).items()}
@@ -118,9 +139,10 @@ def extract_metadata_and_thumb(file_path):
     timestamp = int(time.time() * 1000)
     thumb_path = os.path.join(temp_dir, f"yt_thumb_{pid}_{timestamp}.jpg")
     temp_attach = os.path.join(temp_dir, f"yt_attach_{pid}_{timestamp}.jpg")
+    temp_raw = os.path.join(temp_dir, f"yt_attach_{pid}_{timestamp}.raw")
 
     # Versuche eingebettete Cover-Bilder zu extrahieren. MKV-Bild-Attachments
-    # (z.B. yt-dlp --embed-thumbnail) und MP4-Cover (covr) stellt ffmpeg beide
+    # mit JPEG/PNG (z.B. yt-dlp --embed-thumbnail) und MP4-Cover (covr) stellt ffmpeg beide
     # als Videostream mit attached_pic-Disposition bereit: "0:v" minus "0:V"
     # (= alle Videostreams außer echten Videos) greift genau diese. Dekodieren
     # statt -c copy, damit auch PNG/WebP-Cover als JPEG ankommen.
@@ -130,6 +152,23 @@ def extract_metadata_and_thumb(file_path):
             "-map", "0:v", "-map", "-0:V", "-frames:v", "1", temp_attach
         ]
         subprocess.run(cmd_cover, capture_output=True, text=True, check=False)
+
+        # Bild-Attachments, deren Mimetype ffmpegs Matroska-Demuxer nicht als
+        # attached_pic kennt (v.a. image/webp - yt-dlp konvertiert das WebP-
+        # Thumbnail von YouTube für .mkv NICHT nach PNG/JPEG), bleiben reine
+        # Attachment-Streams und fallen durch "0:v" durch. Diese direkt per
+        # -dump_attachment als Rohdatei herausschreiben.
+        if not os.path.exists(temp_attach) or os.path.getsize(temp_attach) == 0:
+            cover_idx = _find_image_attachment(streams)
+            if cover_idx is not None:
+                cmd_dump = [
+                    "ffmpeg", "-y", f"-dump_attachment:{cover_idx}", temp_raw,
+                    "-i", file_path, "-t", "0", "-f", "null", "-"
+                ]
+                subprocess.run(cmd_dump, capture_output=True, text=True, check=False)
+                if os.path.exists(temp_raw) and os.path.getsize(temp_raw) > 0:
+                    cmd_dec = ["ffmpeg", "-y", "-i", temp_raw, "-frames:v", "1", temp_attach]
+                    subprocess.run(cmd_dec, capture_output=True, text=True, check=False)
 
         if os.path.exists(temp_attach) and os.path.getsize(temp_attach) > 0:
             cmd_conv = ["ffmpeg", "-y", "-i", temp_attach, "-q:v", "2", thumb_path]
@@ -180,10 +219,11 @@ def extract_metadata_and_thumb(file_path):
     except (subprocess.SubprocessError, OSError) as e:
         logger.warning(f"Fehler bei der Thumbnail-Extraktion: {e}")
     finally:
-        # Aufräumen der temporären Attachment-Datei
-        if os.path.exists(temp_attach):
-            with contextlib.suppress(OSError):
-                os.remove(temp_attach)
+        # Aufräumen der temporären Attachment-Dateien
+        for tmp in (temp_attach, temp_raw):
+            if os.path.exists(tmp):
+                with contextlib.suppress(OSError):
+                    os.remove(tmp)
 
     return metadata
 
