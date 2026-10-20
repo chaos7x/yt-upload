@@ -160,3 +160,47 @@ def test_uses_embedded_cover_as_thumbnail(media, videos_with_cover, ext, cleanup
     cleanup_thumbs.append(meta["thumb_path"])
     assert meta["thumb_path"]
     assert _probe_size(meta["thumb_path"]) == COVER_SIZE
+
+
+@pytest.fixture(scope="module")
+def mkv_with_webp_cover(tmp_path_factory, cover_jpg):
+    """
+    Nachbau von yt-dlp --embed-thumbnail bei .mkv: das WebP-Thumbnail wird
+    unkonvertiert als image/webp-Attachment "cover.webp" eingebettet, das
+    ffmpeg nicht als attached_pic-Videostream bereitstellt.
+    """
+    base = tmp_path_factory.mktemp("webp")
+    cover = base / "cover.webp"
+    _ffmpeg("-i", str(cover_jpg), str(cover))
+    plain = _make_video(base / "plain.mkv", CONTAINERS[".mkv"])
+    out = base / "webp_cover.mkv"
+    _ffmpeg(
+        "-i", str(plain), "-map", "0", "-c", "copy", "-attach", str(cover),
+        "-metadata:s:t", "mimetype=image/webp", "-metadata:s:t", "filename=cover.webp",
+        str(out),
+    )
+    return out
+
+
+def test_uses_webp_attachment_as_thumbnail(media, mkv_with_webp_cover, cleanup_thumbs):
+    meta = media.extract_metadata_and_thumb(str(mkv_with_webp_cover))
+    cleanup_thumbs.append(meta["thumb_path"])
+    assert meta["thumb_path"]
+    assert _probe_size(meta["thumb_path"]) == COVER_SIZE
+
+
+class TestFindImageAttachment:
+    def test_prefers_cover_over_other_images(self, media):
+        streams = [
+            {"index": 0, "codec_type": "video"},
+            {"index": 2, "codec_type": "attachment", "tags": {"mimetype": "image/png", "filename": "logo.png"}},
+            {"index": 3, "codec_type": "attachment", "tags": {"mimetype": "image/webp", "filename": "cover.webp"}},
+        ]
+        assert media._find_image_attachment(streams) == 3
+
+    def test_ignores_non_image_attachments(self, media):
+        streams = [
+            {"index": 2, "codec_type": "attachment", "tags": {"mimetype": "application/json", "filename": "info.json"}},
+            {"index": 3, "codec_type": "attachment", "tags": {"mimetype": "font/ttf", "filename": "cover.ttf"}},
+        ]
+        assert media._find_image_attachment(streams) is None
