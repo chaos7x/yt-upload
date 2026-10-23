@@ -6,12 +6,15 @@ name: Docker Build
 # ab - ohne diesen Workflow würde ein kaputtes Dockerfile erst beim nächsten
 # tatsächlichen Release auffallen, nicht schon im PR.
 #
-# pull: true + wöchentlicher schedule-Trigger: Dockerfile.pyimg baut auf
-# python:3-slim (unversionierter, floatender Tag) - ohne erzwungenen Pull
-# und ohne regelmäßigen Lauf unabhängig von Code-Änderungen würde eine neue
-# Python-Version, die die Scripte bricht, erst beim nächsten zufälligen PR
-# auffallen statt zeitnah. Debian/Alpine floaten ebenfalls innerhalb ihrer
-# Major-Version, profitieren also vom selben Mechanismus.
+# Basis-Images: in allen Dockerfiles per Digest gepinnt (`tag@sha256:...`),
+# ein umgebogener Tag auf Docker Hub landet so nicht ungeprüft im Build.
+# Neue Digests/Versionen (auch eine neue Python-Version hinter python:3-slim)
+# schlägt Dependabot (docker) wöchentlich als PR vor - dieser Workflow baut
+# und scannt sie dort, bevor sie in main landen.
+# pull: true + wöchentlicher schedule-Trigger: die Paketstände IM Image
+# (apt-get upgrade/apk upgrade in den Dockerfiles) floaten trotz Digest-Pin
+# weiter - der wöchentliche Lauf zeigt also zeitnah, ob ein OS-Paket-Update
+# den Build bricht, auch ohne Code-Änderung.
 #
 # Trivy-Scan (nicht blockierend, exit-code 0): apt-get upgrade/apk upgrade
 # patchen nur, was der jeweilige Paketmanager kennt. Unter Debian kommen

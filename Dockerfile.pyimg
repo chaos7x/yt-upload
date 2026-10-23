@@ -1,8 +1,13 @@
+# Alle FROM-Images sind per Digest gepinnt (Tag bleibt zur Lesbarkeit stehen):
+# ein nachträglich umgebogener Tag auf Docker Hub landet so nicht ungeprüft im
+# Build. Dependabot (docker) schlägt neue Digests/Versionen wöchentlich als PR
+# vor. OS-Security-Patches kommen unabhängig davon weiter über apt-get/apk
+# upgrade beim Build (docker-refresh.yml / os-patch-release.yml).
 # ==========================================
 # STUFE 0: Statische Binaries bereitstellen
 # ==========================================
 # Holt die offiziellen, statisch gelinkten FFmpeg- und FFprobe-Binaries von mwader
-FROM mwader/static-ffmpeg:latest AS ffmpeg-binaries
+FROM mwader/static-ffmpeg:9.0.2-1@sha256:f5d100184884eb3e82b0eb14bb5ebf98da99826ac824989720297fb9ef21c822 AS ffmpeg-binaries
 
 # ==========================================
 # STUFE 1: Builder - installiert yt_upload (+ get_token) und alle
@@ -14,7 +19,7 @@ FROM mwader/static-ffmpeg:latest AS ffmpeg-binaries
 # nicht im Laufzeit-Image landen. --target sammelt daher alle Pakete (eigenes
 # Package + requests + deren jeweilige Abhängigkeiten) flach in
 # einem Ordner, aus dem unten gezielt nach /rootfs übernommen wird.
-FROM python:3-slim AS builder
+FROM python:3-slim@sha256:044d5bd747976e21f8bc4d746c3479b19a84bb8ae6261b802acdd26b29036c93 AS builder
 
 WORKDIR /build
 COPY pyproject.toml /build/pyproject.toml
@@ -51,7 +56,7 @@ COPY upload.conf.example /rootfs/etc/yt-upload/upload.conf
 # ==========================================
 # STUFE 2: FINAL STAGE (Schlankes Laufzeit-Image, kein pip/setuptools)
 # ==========================================
-FROM python:3-slim
+FROM python:3-slim@sha256:044d5bd747976e21f8bc4d746c3479b19a84bb8ae6261b802acdd26b29036c93
 
 # ------------------------------------------
 # LAYER 1: FFmpeg Binaries aus STUFE 0 kopieren
