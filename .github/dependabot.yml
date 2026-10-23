@@ -9,6 +9,12 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    # Cooldown: neue Releases erst nach 7 Tagen vorschlagen - ein kompromittiertes
+    # Release (wie bei trivy-action, CVE-2026-33634) faellt meist innerhalb von
+    # Stunden bis Tagen auf und wird zurueckgezogen. Security-Updates sind davon
+    # nicht betroffen und kommen weiterhin sofort.
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "pip"
     directory: "/"
@@ -24,3 +30,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Cooldown: neue Releases erst nach 7 Tagen vorschlagen - ein kompromittiertes
+    # Release (wie bei trivy-action, CVE-2026-33634) faellt meist innerhalb von
+    # Stunden bis Tagen auf und wird zurueckgezogen. Security-Updates sind davon
+    # nicht betroffen und kommen weiterhin sofort.
+    cooldown:
+      default-days: 7
