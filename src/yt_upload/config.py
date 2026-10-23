@@ -145,12 +145,29 @@ def _resolve_credentials_file(in_container: bool) -> str:
 
 CREDENTIALS_FILE = _resolve_credentials_file(os.path.exists("/app/oauth"))
 
+
+def _default_health_dir() -> str:
+    """
+    Verzeichnis der Heartbeat-Datei: /var/run/yt-upload, sofern der Init-Dienst
+    es angelegt hat (systemd RuntimeDirectory=, init.d bzw. FreeBSD-rc.d per
+    install -d). Es gehört dem Dienstuser - ein anderer lokaler User kann die
+    Datei dort weder vorab anlegen noch per Symlink unterschieben, anders als
+    unter festem Namen im gemeinsamen /tmp. Außerdem findet so auch ein
+    manueller `yt-upload --healthcheck` außerhalb des PrivateTmp-Namespace der
+    Unit die Datei. /var/run statt /run: unter Linux ein Symlink auf /run,
+    unter FreeBSD der übliche Ort. Sonst (Docker, manueller Aufruf) wie bisher
+    das Temp-Verzeichnis.
+    """
+    run_dir = "/var/run/yt-upload"
+    return run_dir if os.path.isdir(run_dir) else tempfile.gettempdir()
+
+
 # Heartbeat-Datei für den Healthcheck (z.B. Docker HEALTHCHECK). Der Dämon
 # aktualisiert sie regelmäßig; ein separater, sehr leichtgewichtiger Aufruf
 # desselben Skripts (--healthcheck) prüft nur, ob sie frisch genug ist -
 # ohne Config zu laden oder Verzeichnisse anzulegen, damit der Healthcheck
 # selbst schnell ist und keine Nebenwirkungen hat.
-HEALTH_FILE = os.environ.get('HEALTH_FILE', os.path.join(tempfile.gettempdir(), "yt-upload.health"))
+HEALTH_FILE = os.environ.get('HEALTH_FILE', os.path.join(_default_health_dir(), "yt-upload.health"))
 # Wie alt die Heartbeat-Datei maximal sein darf, bevor --healthcheck als
 # "unhealthy" (Exit-Code 1) gilt. Grosszügig bemessen, da ein einzelner
 # Upload-Chunk bei langsamer Verbindung durchaus mehrere Minuten dauern kann.
