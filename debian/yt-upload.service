@@ -26,6 +26,11 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+# /run/yt-upload (dem Dienstuser gehoerend, beim Stoppen wieder entfernt) fuer
+# die Heartbeat-Datei: config.py nimmt es automatisch, sobald es existiert -
+# dann findet auch ein manueller `yt-upload --healthcheck` ausserhalb des
+# PrivateTmp-Namespace die Datei.
+RuntimeDirectory=yt-upload
 ReadWritePaths=/srv/media-pipeline /var/log/yt-upload /etc/yt-upload
 ProtectKernelTunables=true
 ProtectKernelModules=true

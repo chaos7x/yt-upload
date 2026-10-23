@@ -29,6 +29,11 @@ RUN_AS=yt-upload
 . /lib/lsb/init-functions
 
 do_start() {
+    # Laufzeitverzeichnis fuer die Heartbeat-Datei (Pendant zu
+    # RuntimeDirectory= in der systemd-Unit): gehoert dem Dienstuser, ein
+    # anderer lokaler User kann die Datei dort weder vorab anlegen noch per
+    # Symlink unterschieben - anders als unter festem Namen im gemeinsamen /tmp.
+    install -d -o "$RUN_AS" -g "$RUN_AS" -m 0755 "/run/$NAME"
     # --background: yt-upload daemonisiert sich nicht selbst (laeuft im
     # Vordergrund, wie unter systemd Type=simple) - start-stop-daemon
     # uebernimmt das Forken. --chuid ruft initgroups() fuer RUN_AS auf,

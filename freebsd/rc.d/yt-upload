@@ -52,4 +52,15 @@ procname="/usr/sbin/daemon"
 command="/usr/sbin/daemon"
 command_args="-f -S -T yt-upload -r -R 5 -P ${pidfile} -u ${yt_upload_runas} ${yt_upload_command} -D ${yt_upload_args}"
 
+start_precmd="yt_upload_prestart"
+
+# Laufzeitverzeichnis fuer die Heartbeat-Datei (Pendant zu RuntimeDirectory=
+# in der systemd-Unit): gehoert dem Dienstuser, ein anderer lokaler User kann
+# die Datei dort weder vorab anlegen noch per Symlink unterschieben - anders
+# als unter festem Namen im gemeinsamen /tmp.
+yt_upload_prestart()
+{
+	install -d -o ${yt_upload_runas} -m 0755 /var/run/yt-upload
+}
+
 run_rc_command "$1"

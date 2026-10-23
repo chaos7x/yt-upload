@@ -21,6 +21,11 @@ updates:
     schedule:
       interval: "weekly"
 
+  # Alle Actions in .github/workflows/ sind auf Commit-SHAs gepinnt
+  # (`uses: owner/action@<sha> # vX.Y.Z`) statt auf bewegliche Tags/Branches -
+  # ein nachtraeglich umgebogener Tag (Supply-Chain-Angriff wie bei
+  # trivy-action, CVE-2026-33634) laeuft so nicht unbemerkt in die CI.
+  # Dependabot aktualisiert SHA und Versions-Kommentar gemeinsam per PR.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
