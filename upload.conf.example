@@ -88,3 +88,12 @@
 # Adfly & Spammige Shortener
 #adf.ly = true
 #shorte.st = true
+
+[force_private]
+# Videos dieser Artists (ARTIST-Tag der Datei, bei tw-recorder der Twitch-Kanal,
+# bei yt-dlp der Uploader) immer als 'private' hochladen, unabhängig von
+# privacy_status - z.B. um sie vor der Freigabe in YouTube Studio ab 18
+# einzustufen (die Altersbeschränkung lässt sich per API nicht setzen).
+# Groß-/Kleinschreibung egal; --privacy auf der Kommandozeile hat Vorrang.
+# Zusätzlich per Umgebungsvariable: FORCE_PRIVATE_ARTISTS=kanal1,kanal2
+#streamername = true

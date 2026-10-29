@@ -146,7 +146,16 @@ def process_single_file(file_path, args=None, manage_files=True):
     rec_date = rec_date_arg or meta["date"]
     thumb_path = _arg(args, "thumbnail", meta["thumb_path"])
 
-    privacy = _arg(args, "privacy", config.VIDEO_PRIVACY)
+    privacy = _arg(args, "privacy")
+    if not privacy:
+        # [force_private]: z.B. ab-18-Streamer immer privat hochladen, die
+        # Altersbeschränkung lässt sich per API nicht setzen (nur in YouTube Studio)
+        artist = (meta.get("artist") or "").strip().lower()
+        if artist and artist in config.FORCE_PRIVATE_ARTISTS:
+            logger.info(f"🔒 Artist '{meta['artist']}' steht in [force_private], lade als 'private' hoch.")
+            privacy = "private"
+        else:
+            privacy = config.VIDEO_PRIVACY
     publish_at = _arg(args, "publish_at")
     license_type = _arg(args, "license", "youtube")
     location = _arg(args, "location")

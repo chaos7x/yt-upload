@@ -17,6 +17,7 @@ Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten 
 * **Metadaten- & Thumbnail-Extraktion:** Liest Titel, Beschreibung, PURL, Genre, Aufnahmedatum und Artist via `ffprobe` aus. Extrahiert automatisch Thumbnails aus MKV-Attachments (JPEG, PNG und WebP, z. B. von `yt-dlp --embed-thumbnail`), MP4-Covern oder generiert ein Frame-Thumbnail.
 * **Verlustfreies FFmpeg-Splitting:** Zertrennt Videos mit einer Laufzeit von über 10 Stunden (36.000 Sekunden) automatisch und ohne Qualitätsverlust (`-c copy`) in durchnummerierte Segmente.
 * **Dynamische Playlist-Verwaltung:** Erstellt und verknüpft Ziel-Playlists automatisch (z. B. auf Basis des `ARTIST`-Tags via `ENABLE_DYNAMIC_PLAYLISTS`).
+* **Erzwungen privat pro Artist:** Videos bestimmter Artists (`ARTIST`-Tag, z. B. Twitch-Kanal von tw-recorder) werden über die Sektion `[force_private]` bzw. `FORCE_PRIVATE_ARTISTS` immer als `private` hochgeladen, etwa um sie vor der Freigabe in YouTube Studio ab 18 einzustufen (per API nicht möglich).
 * **Robustes Retry & Health-Check:** Prüft Videodateien vor dem Upload auf unvollständige Schreibvorgänge / fehlende `moov`-Atome. Bereits erfolgreich hochgeladene Segmente werden bei einem Fehler im nächsten Segment nicht erneut hochgeladen (Fortschritt wird pro Datei persistiert) - fehlgeschlagene Jobs mit Teilfortschritt oder einem reinen API-Kontingent-Limit (`quotaExceeded`) landen in `RETRY_DIR`, komplett fehlerhafte in `CORRUPT_DIR`. Ein optionaler `yt-upload-retry.timer` (siehe unten) verschiebt `RETRY_DIR`-Inhalte periodisch automatisch zurück nach `IN_DIR`.
 
 Eine Übersicht der internen Architektur (Module, Datenfluss, Diagramm) findet sich in [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -535,6 +536,15 @@ Mit `-f`/`--config PATH` lässt sich stattdessen eine eigene Config-Datei angebe
 # Adfly & Spammige Shortener
 #adf.ly = true
 #shorte.st = true
+
+[force_private]
+# Videos dieser Artists (ARTIST-Tag der Datei, bei tw-recorder der Twitch-Kanal,
+# bei yt-dlp der Uploader) immer als 'private' hochladen, unabhängig von
+# privacy_status - z.B. um sie vor der Freigabe in YouTube Studio ab 18
+# einzustufen (die Altersbeschränkung lässt sich per API nicht setzen).
+# Groß-/Kleinschreibung egal; --privacy auf der Kommandozeile hat Vorrang.
+# Zusätzlich per Umgebungsvariable: FORCE_PRIVATE_ARTISTS=kanal1,kanal2
+#streamername = true
 ```
 
 ### Wichtige CLI-Flags
