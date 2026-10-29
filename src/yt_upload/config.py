@@ -195,6 +195,8 @@ CURRENT_CONFIG_HASH = ""
 ENABLE_DESCRIPTION_CENSOR = os.environ.get('ENABLE_DESCRIPTION_CENSOR', 'false').lower() in ('true', 'yes', '1')
 _env_blacklist = os.environ.get('DESCRIPTION_BLACKLIST', '')
 DESCRIPTION_BLACKLIST = [w.strip() for w in _env_blacklist.split(',') if w.strip()]
+# ARTIST-Tags (z.B. Twitch-Kanal von tw-recorder), deren Videos immer privat hochgeladen werden
+FORCE_PRIVATE_ARTISTS = []
 
 
 # ==============================================================================
@@ -216,7 +218,7 @@ def load_configuration(log_changes=False):
     global AUTO_THUMB_MIN_SEC, AUTO_THUMB_MAX_SEC, ALLOW_OVERWRITE, DYNAMIC_PLAYLISTS
     global ADD_START_TIME_TO_DESCRIPTION
     global CURRENT_CONFIG_HASH
-    global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST
+    global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST, FORCE_PRIVATE_ARTISTS
     global LOG_FILE_EXPLICIT
 
     in_dir = IN_DIR
@@ -244,6 +246,9 @@ def load_configuration(log_changes=False):
     add_start_time_to_description = ADD_START_TIME_TO_DESCRIPTION
 
     combined_blacklist = set(DESCRIPTION_BLACKLIST) if DESCRIPTION_BLACKLIST else set()
+    # Anders als die Blacklist bei jedem Laden neu aufgebaut, damit ein aus
+    # der Config entfernter Eintrag per Hot-Reload auch wieder wegfällt
+    force_private = set()
 
     config = configparser.ConfigParser()
     config_files = []
@@ -346,6 +351,13 @@ def load_configuration(log_changes=False):
                     if val.lower() in ('true', '1', 'yes', 'on', ''):
                         combined_blacklist.add(key.strip().lower())
 
+        # Sektion [force_private] einlesen (Schlüssel = ARTIST-Tag)
+        if 'force_private' in config:
+            for key in config.options('force_private'):
+                val = config.get('force_private', key, fallback='true')
+                if val.lower() in ('true', '1', 'yes', 'on', ''):
+                    force_private.add(key.strip().lower())
+
     # --- Step 2: Umgebungsvariablen verarbeiten (Höchste Priorität) ---
     IN_DIR = os.environ.get('IN_DIR', in_dir)
     WORK_DIR = os.environ.get('WORK_DIR', work_dir)
@@ -388,6 +400,13 @@ def load_configuration(log_changes=False):
                 combined_blacklist.add(cleaned)
 
     DESCRIPTION_BLACKLIST = sorted(combined_blacklist)
+
+    if 'FORCE_PRIVATE_ARTISTS' in os.environ:
+        for a in os.environ['FORCE_PRIVATE_ARTISTS'].split(','):
+            cleaned = a.strip().lower()
+            if cleaned:
+                force_private.add(cleaned)
+    FORCE_PRIVATE_ARTISTS = sorted(force_private)
 
     ALLOW_EMBEDDING = allow_embedding
     AUTO_GENERATE_THUMBNAIL = auto_generate_thumbnail

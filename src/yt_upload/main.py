@@ -80,7 +80,7 @@ def parse_arguments(argv=None):
     parser.add_argument("-v", "--version", action="version", version=f"{__title__} v{__version__}")
     parser.add_argument("--tags", help="Kommagetrennte Liste von Tags (Standard: genre-Tag der Datei, sonst default_tags aus upload.conf)")
     
-    parser.add_argument("--privacy", choices=["public", "private", "unlisted"], default=None, help="Sichtbarkeit (Standard: privacy_status aus upload.conf, sonst unlisted; mit --publish-at immer private)")
+    parser.add_argument("--privacy", choices=["public", "private", "unlisted"], default=None, help="Sichtbarkeit (Standard: private für Artists aus [force_private], sonst privacy_status aus upload.conf, sonst unlisted; mit --publish-at immer private)")
 
     parser.add_argument("--thumbnail", help="Pfad zu benutzerdefiniertem Thumbnail-Bild (Standard: eingebettetes Cover, sonst automatisch generiert, falls auto_generate_thumbnail aktiv)")
     parser.add_argument("--playlist", help="Name der Ziel-Playlist (Standard: playlist_name aus upload.conf bzw. Artist bei enable_dynamic_playlists; leer = keine Playlist)")
