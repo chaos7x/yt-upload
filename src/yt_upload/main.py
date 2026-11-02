@@ -7,7 +7,7 @@ import sys
 
 from yt_upload import __title__, __version__, config
 from yt_upload.daemon import acquire_instance_lock, find_existing_video, run_daemon
-from yt_upload.fileutils import ensure_directories, requeue_retries
+from yt_upload.fileutils import ensure_directories, purge_done, requeue_retries
 from yt_upload.healthcheck import run_healthcheck
 from yt_upload.logging_setup import setup_logging
 from yt_upload.pipeline import process_single_file
@@ -66,6 +66,7 @@ def parse_arguments(argv=None):
     parser.add_argument("-D", "--daemon", action="store_true", help="Dämon-Modus: Dauerhafte inotify-Verzeichnisüberwachung (benötigt zusätzlich das Paket yt-upload-daemon)")
     parser.add_argument("--healthcheck", action="store_true", help="Prüft nur den Heartbeat des laufenden Dämons und beendet sich sofort (für Docker HEALTHCHECK)")
     parser.add_argument("--requeue-retries", action="store_true", help="Verschiebt alle Dateien aus RETRY_DIR zurück nach IN_DIR und beendet sich sofort (für einen periodischen systemd-Timer, siehe yt-upload-retry.timer)")
+    parser.add_argument("--purge-done", action="store_true", help="Löscht Dateien, die seit mindestens done_retention_days (Standard: 7, 0 = aus) in DONE_DIR liegen, und beendet sich sofort (für einen periodischen systemd-Timer, siehe yt-upload-purge.timer)")
 
     parser.add_argument("-t", "--title", help="Video-Titel (Standard: title-Tag der Datei, sonst Dateiname)")
     parser.add_argument(
@@ -149,7 +150,7 @@ def main():
     # Logdatei) nicht anlegbar sind (z.B. Bare-Metal-Installation ohne
     # gesetztes upload.conf, Aufruf aus einem schreibgeschützten
     # Verzeichnis), unnötige Permission-Warnungen erzeugen.
-    if not (args.files or args.auto or args.daemon or args.requeue_retries):
+    if not (args.files or args.auto or args.daemon or args.requeue_retries or args.purge_done):
         print(f"{__title__} v{__version__}\n")
         print("Bitte einen Betriebsmodus wählen:")
         print("  - Einzelne Datei:  yt-upload /pfad/zum/video.mp4")
@@ -157,6 +158,7 @@ def main():
         print("  - Auto-Pipeline:   yt-upload -a")
         print("  - Dämon-Modus:     yt-upload -D (benötigt zusätzlich das Paket yt-upload-daemon)")
         print("  - Retry-Requeue:   yt-upload --requeue-retries (für einen periodischen systemd-Timer)")
+        print("  - DONE aufräumen:  yt-upload --purge-done (für einen periodischen systemd-Timer)")
         print("\nNutze -h oder --help für alle Optionen.")
         return
 
@@ -175,6 +177,14 @@ def main():
         setup_logging()
         moved = requeue_retries()
         logger.info(f"Requeue abgeschlossen: {moved} Datei(en) von RETRY_DIR zurück nach IN_DIR verschoben.")
+        return
+
+    # --purge-done: ebenso kurzlebig und ohne Instanz-Lock - löscht nur alte
+    # Dateien aus DONE_DIR, die der Dämon nach dem Verschieben nie wieder anfasst.
+    if args.purge_done:
+        setup_logging()
+        deleted = purge_done()
+        logger.info(f"DONE-Aufräumen abgeschlossen: {deleted} Datei(en) gelöscht.")
         return
 
     # Nur Auto-Batch (-a) und Dämon (-D) verwalten Dateien über die festen

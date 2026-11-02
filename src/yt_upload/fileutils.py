@@ -12,8 +12,10 @@ import json
 import logging
 import os
 import shutil
+import stat
 import sys
 import tempfile
+import time
 
 from yt_upload import config
 
@@ -183,6 +185,56 @@ def requeue_retries():
             logger.error(f"Requeue fehlgeschlagen für {filename}: {e}")
 
     return moved
+
+
+def purge_done(now=None):
+    """
+    Löscht Dateien aus DONE_DIR, die seit mindestens DONE_RETENTION_DAYS Tagen
+    dort liegen (0 = nichts löschen). Wie requeue_retries() für einen extern
+    getriggerten, periodischen Aufruf gedacht (siehe yt-upload-purge.timer);
+    die Frist steht in der Config, der Timer bestimmt nur, wie oft geprüft wird.
+
+    Maßgeblich ist st_ctime, nicht st_mtime: shutil.move()/os.rename() nach
+    DONE_DIR lässt die mtime unverändert (sie zeigt also das Aufnahme- bzw.
+    Downloaddatum), setzt aber die ctime neu - auch bei ext4, ZFS, btrfs und
+    FreeBSD UFS/ZFS. Eine alte Datei würde mit mtime sonst direkt nach dem
+    Upload gelöscht. Spätere chmod/chown setzen die ctime ebenfalls neu, das
+    verschiebt das Löschen nur nach hinten, nie nach vorne.
+
+    Nur reguläre Dateien direkt in DONE_DIR (keine Unterverzeichnisse, keine
+    Symlinks, keine Dotfiles). CORRUPT_DIR/RETRY_DIR bleiben unangetastet.
+
+    Gibt die Anzahl tatsächlich gelöschter Dateien zurück.
+    """
+    days = config.DONE_RETENTION_DAYS
+    if days <= 0:
+        logger.info("DONE_RETENTION_DAYS ist 0 - in DONE_DIR wird nichts gelöscht.")
+        return 0
+    if not os.path.isdir(config.DONE_DIR):
+        return 0
+
+    cutoff = (time.time() if now is None else now) - days * 86400
+    deleted = 0
+    for filename in sorted(os.listdir(config.DONE_DIR)):
+        if filename.startswith("."):
+            continue
+
+        path = os.path.join(config.DONE_DIR, filename)
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode) or st.st_ctime > cutoff:
+            continue
+
+        try:
+            os.unlink(path)
+            logger.info(f"🗑️ DONE aufgeräumt: {filename} gelöscht (älter als {days} Tage).")
+            deleted += 1
+        except OSError as e:
+            logger.error(f"Löschen fehlgeschlagen für {filename}: {e}")
+
+    return deleted
 
 
 def cleanup_generated_thumbnail(thumb_path):

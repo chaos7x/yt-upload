@@ -19,6 +19,7 @@ Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten 
 * **Dynamische Playlist-Verwaltung:** Erstellt und verknüpft Ziel-Playlists automatisch (z. B. auf Basis des `ARTIST`-Tags via `ENABLE_DYNAMIC_PLAYLISTS`).
 * **Erzwungen privat pro Artist:** Videos bestimmter Artists (`ARTIST`-Tag, z. B. Twitch-Kanal von tw-recorder) werden über die Sektion `[force_private]` bzw. `FORCE_PRIVATE_ARTISTS` immer als `private` hochgeladen, etwa um sie vor der Freigabe in YouTube Studio ab 18 einzustufen (per API nicht möglich).
 * **Robustes Retry & Health-Check:** Prüft Videodateien vor dem Upload auf unvollständige Schreibvorgänge / fehlende `moov`-Atome. Bereits erfolgreich hochgeladene Segmente werden bei einem Fehler im nächsten Segment nicht erneut hochgeladen (Fortschritt wird pro Datei persistiert) - fehlgeschlagene Jobs mit Teilfortschritt oder einem reinen API-Kontingent-Limit (`quotaExceeded`) landen in `RETRY_DIR`, komplett fehlerhafte in `CORRUPT_DIR`. Ein optionaler `yt-upload-retry.timer` (siehe unten) verschiebt `RETRY_DIR`-Inhalte periodisch automatisch zurück nach `IN_DIR`.
+* **Aufräumen von `DONE_DIR`:** Ein optionaler `yt-upload-purge.timer` (`yt-upload --purge-done`) löscht hochgeladene Originale, sobald sie länger als `done_retention_days` (Standard 7 Tage) in `DONE_DIR` liegen. `CORRUPT_DIR`/`RETRY_DIR` bleiben unangetastet.
 
 Eine Übersicht der internen Architektur (Module, Datenfluss, Diagramm) findet sich in [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -216,6 +217,8 @@ Persistent=true
 WantedBy=timers.target
 ```
 
+Dasselbe gilt für das Aufräumen von `DONE_DIR` (`--purge-done`, siehe Bare-Metal-Abschnitt): eine zweite Host-Crontab-Zeile bzw. ein zweites Service/Timer-Paar mit `docker exec yt-upload yt-upload --purge-done`.
+
 (`yt-upload` im `docker exec`-Aufruf ist hier der `container_name` aus der Compose-Datei oben, nicht der Befehl - bei abweichendem Namen entsprechend anpassen.)
 
 #### Alternative: Scheduler-Sidecar in der docker-compose.yaml (ofelia)
@@ -311,6 +314,20 @@ Ohne systemd übernimmt cron dieselbe Aufgabe: `/etc/cron.d/yt-upload-retry` wir
 sed -i 's/^#0 3/0 3/' /etc/cron.d/yt-upload-retry
 ```
 
+#### Optional: Alte Dateien in DONE_DIR löschen
+
+Erfolgreich hochgeladene Originale bleiben in `DONE_DIR` liegen. `yt-upload --purge-done` löscht dort alle Dateien, die seit mindestens `done_retention_days` Tagen (in `upload.conf` unter `[settings]` bzw. `DONE_RETENTION_DAYS`, Standard `7`, `0` = nie löschen) in `DONE_DIR` liegen. Gezählt wird ab der Ankunft in `DONE_DIR` (ctime der Datei), nicht ab dem Aufnahme- oder Downloaddatum - ein altes yt-dlp-Video wird also nicht direkt nach dem Upload gelöscht. Nur reguläre Dateien direkt in `DONE_DIR`, keine Unterverzeichnisse, Symlinks oder Dotfiles; `CORRUPT_DIR` und `RETRY_DIR` werden nie angefasst. Wie der Retry-Timer läuft das als eigener, kurzlebiger Oneshot-Dienst ohne Netzwerkzugriff und wird nicht automatisch aktiviert:
+
+```bash
+systemctl enable --now yt-upload-purge.timer
+```
+
+Der Timer prüft täglich, die Frist selbst steht nur in der Config. Ohne systemd liegt `/etc/cron.d/yt-upload-purge` deaktiviert bei:
+
+```bash
+sed -i 's/^#30 4/30 4/' /etc/cron.d/yt-upload-purge
+```
+
 ### Alternative: FreeBSD-Paket (.pkg)
 
 Jedes Release enthält neben den `.deb`-Dateien auch FreeBSD-Pakete, je eines für FreeBSD 14 und 15 (`…-freebsd14.pkg` / `…-freebsd15.pkg`, gebaut von `freebsd/build-pkg.py`). Sie hängen fest an Python 3.11 (`python311`), damit Interpreter und Python-Abhängigkeiten zusammenpassen:
@@ -348,6 +365,12 @@ Vor dem `service yt-upload start` wie unter Linux `/etc/yt-upload/upload.conf` a
 
 ```sh
 echo '0 3 * * * yt-upload /usr/local/bin/yt-upload --requeue-retries >/dev/null 2>&1' > /usr/local/etc/cron.d/yt-upload-retry
+```
+
+Ebenso optional das tägliche Löschen alter Dateien in `DONE_DIR` (`done_retention_days`, Standard 7 Tage):
+
+```sh
+echo '30 4 * * * yt-upload /usr/local/bin/yt-upload --purge-done >/dev/null 2>&1' > /usr/local/etc/cron.d/yt-upload-purge
 ```
 
 Das Skript startet `yt-upload -D` über `daemon(8)` (Neustart bei Absturz, Userwechsel inkl. `media-pipeline`-Zusatzgruppe) und leitet die Ausgabe an syslog weiter (Tag `yt-upload`, landet standardmäßig in `/var/log/messages`). Weitere Einstellungen (`yt_upload_runas`, `yt_upload_args`, `yt_upload_env`) stehen im Kopf des Skripts.
@@ -425,7 +448,8 @@ Alle drei Varianten lassen kein Build-Tooling (`pip`/`setuptools`, sofern nicht 
 
 ## 💻 CLI & Parameter Übersicht
 ```text
-yt-upload [-h] [-v] [-f PATH] [-a] [-D] [--healthcheck] [--requeue-retries] [-t TITLE]
+yt-upload [-h] [-v] [-f PATH] [-a] [-D] [--healthcheck] [--requeue-retries]
+          [--purge-done] [-t TITLE]
           [--title-template TEMPLATE]
           [-d DESCRIPTION | --description-file PATH]
           [-c CATEGORY] [--tags TAGS] [--privacy {public,private,unlisted}]
@@ -515,6 +539,10 @@ Mit `-f`/`--config PATH` lässt sich stattdessen eine eigene Config-Datei angebe
 # Bei Namenskonflikten in DONE/CORRUPT Dateien überschreiben statt umzubenennen (true/false)
 #allow_overwrite = true
 
+# Dateien in done_dir nach so vielen Tagen löschen (ab Ankunft in done_dir;
+# 0 = nie). Wirkt nur mit `yt-upload --purge-done` (yt-upload-purge.timer)
+#done_retention_days = 7
+
 # Aktiviert die Zensurfunktion für die description
 #enable_description_censor = false
 
@@ -560,6 +588,9 @@ Mit `-f`/`--config PATH` lässt sich stattdessen eine eigene Config-Datei angebe
 * `--requeue-retries`
   Verschiebt alle Dateien aus `RETRY_DIR` zurück nach `IN_DIR` und beendet sich sofort - für einen periodischen systemd-Timer gedacht (siehe `yt-upload-retry.timer` weiter oben), kann aber auch manuell aufgerufen werden.
 
+* `--purge-done`
+  Löscht Dateien, die seit mindestens `done_retention_days` Tagen (Standard: `7`, `0` = aus) in `DONE_DIR` liegen, und beendet sich sofort - für einen periodischen systemd-Timer gedacht (siehe `yt-upload-purge.timer` weiter oben).
+
 * `-t`, `--title` `TEXT`
   Setzt explizit den Videotitel (überschreibt ausgelesene Metadaten).
 
@@ -604,6 +635,10 @@ Mit `-f`/`--config PATH` lässt sich stattdessen eine eigene Config-Datei angebe
 * `ADD_START_TIME_TO_DESCRIPTION`
   * **Standard:** `true`
   * **Beschreibung:** Stellt der Beschreibung die Startzeit aus dem `RECORDING_START`-Tag der Datei voran (schreibt tw-recorder ab 1.8.0) (`Aufnahmestart: 01.10.2026 22:15 CEST`, Zeitzone per `TZ`). Dateien ohne dieses Tag (z.B. yt-dlp-Downloads) bleiben unverändert. Bei gesplitteten Videos bekommt jeder Teil seine eigene Startzeit. Die Startzeit geht außerdem immer als `recordingDate` an YouTube, das dort aber nur das Datum anzeigt.
+
+* `DONE_RETENTION_DAYS`
+  * **Standard:** `7`
+  * **Beschreibung:** Mindestalter in Tagen (ab Ankunft in `DONE_DIR`), ab dem `--purge-done` eine Datei löscht. `0` schaltet das Löschen ab. Wirkt nur, wenn `--purge-done` periodisch aufgerufen wird.
 
 * `TZ`
   * **Standard:** `UTC`

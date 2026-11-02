@@ -1,0 +1,9 @@
+# SysV-Pendant zu yt-upload-purge.timer (nur relevant ohne systemd, z.B.
+# Devuan/sysvinit-core - auf einem systemd-Host stattdessen
+# `systemctl enable --now yt-upload-purge.timer` verwenden). Loescht taeglich
+# Dateien, die laenger als done_retention_days (upload.conf, Standard 7 Tage,
+# 0 = aus) in DONE_DIR liegen.
+#
+# Standardmaessig deaktiviert (auskommentiert) ausgeliefert. Zum Aktivieren
+# einfach die Zeile unten einkommentieren.
+#30 4 * * * yt-upload /usr/bin/yt-upload --purge-done >/dev/null 2>&1

@@ -67,6 +67,14 @@
 # Bei Namenskonflikten in DONE/CORRUPT Dateien überschreiben statt umzubenennen (true/false)
 #allow_overwrite = true
 
+# Dateien in done_dir nach so vielen Tagen löschen (gezählt ab Ankunft in
+# done_dir, nicht ab Aufnahmedatum; 0 = nie löschen). Wirkt nur, wenn
+# `yt-upload --purge-done` periodisch läuft (yt-upload-purge.timer bzw.
+# /etc/cron.d/yt-upload-purge, beide standardmäßig deaktiviert).
+# corrupt_dir und retry_dir werden nie angefasst.
+# Umgebungsvariable: DONE_RETENTION_DAYS
+#done_retention_days = 7
+
 # Aktiviert die Zensurfunktion für die description
 #enable_description_censor = false
 

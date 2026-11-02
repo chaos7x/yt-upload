@@ -1,0 +1,37 @@
+[Unit]
+Description=yt-upload - Loeschen alter Dateien aus DONE_DIR
+Documentation=https://github.com/chaos7x/yt-upload
+
+[Service]
+Type=oneshot
+User=yt-upload
+Group=yt-upload
+SupplementaryGroups=media-pipeline
+ExecStart=/usr/bin/yt-upload --purge-done
+
+# --- Hardening ---
+# Die Aufbewahrungsfrist steht in upload.conf (done_retention_days, Standard 7
+# Tage, 0 = aus), siehe fileutils.purge_done(). Das Timer-Intervall bestimmt
+# nur, wie oft geprueft wird.
+#
+# Gleich streng wie yt-upload-retry.service: loescht nur Dateien in DONE_DIR,
+# keine Netzwerk-Anfragen - RestrictAddressFamilies=none blockiert deshalb
+# saemtliche Adressfamilien. ReadWritePaths bleibt bewusst EIN Eintrag fuer
+# /srv/media-pipeline (wie alle Units der Pipeline).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/media-pipeline /var/log/yt-upload
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+RestrictAddressFamilies=none

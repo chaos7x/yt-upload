@@ -1,0 +1,15 @@
+[Unit]
+Description=Periodisches Loeschen alter Dateien aus DONE_DIR (yt-upload)
+Documentation=https://github.com/chaos7x/yt-upload
+
+[Timer]
+# Prueft taeglich, ob Dateien in DONE_DIR aelter als done_retention_days
+# (upload.conf, Standard 7 Tage) sind. Die Frist selbst steht in der Config,
+# nicht hier - per `systemctl edit yt-upload-purge.timer` laesst sich nur
+# die Pruef-Kadenz aendern.
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

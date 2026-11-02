@@ -189,6 +189,10 @@ ALLOW_OVERWRITE = True
 DYNAMIC_PLAYLISTS = False
 # Startzeit aus dem RECORDING_START-Tag (tw-recorder) als Zeile "Aufnahmestart: ..." der Beschreibung voranstellen
 ADD_START_TIME_TO_DESCRIPTION = True
+# Mindestalter (in Tagen seit Ankunft in DONE_DIR), ab dem --purge-done eine
+# Datei löscht. 0 = nie löschen. Wirkt nur, wenn --purge-done tatsächlich
+# aufgerufen wird (yt-upload-purge.timer/-cron, standardmäßig deaktiviert).
+DONE_RETENTION_DAYS = 7
 
 # Laufzeit-Variablen für Hot-Reload und Zensur-Einstellungen
 CURRENT_CONFIG_HASH = ""
@@ -216,7 +220,7 @@ def load_configuration(log_changes=False):
     global DEFAULT_DESCRIPTION, DEFAULT_TAGS, DEFAULT_CATEGORY, VIDEO_PRIVACY
     global VIDEO_LANGUAGE, ALLOW_EMBEDDING, PLAYLIST_NAME, AUTO_GENERATE_THUMBNAIL
     global AUTO_THUMB_MIN_SEC, AUTO_THUMB_MAX_SEC, ALLOW_OVERWRITE, DYNAMIC_PLAYLISTS
-    global ADD_START_TIME_TO_DESCRIPTION
+    global ADD_START_TIME_TO_DESCRIPTION, DONE_RETENTION_DAYS
     global CURRENT_CONFIG_HASH
     global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST, FORCE_PRIVATE_ARTISTS
     global LOG_FILE_EXPLICIT
@@ -244,6 +248,7 @@ def load_configuration(log_changes=False):
     enable_description_censor = ENABLE_DESCRIPTION_CENSOR
     dynamic_playlists = DYNAMIC_PLAYLISTS
     add_start_time_to_description = ADD_START_TIME_TO_DESCRIPTION
+    done_retention_days = DONE_RETENTION_DAYS
 
     combined_blacklist = set(DESCRIPTION_BLACKLIST) if DESCRIPTION_BLACKLIST else set()
     # Anders als die Blacklist bei jedem Laden neu aufgebaut, damit ein aus
@@ -342,6 +347,10 @@ def load_configuration(log_changes=False):
             add_start_time_to_description = config.getboolean(
                 'settings', 'add_start_time_to_description', fallback=add_start_time_to_description
             )
+            try:
+                done_retention_days = config.getint('settings', 'done_retention_days', fallback=done_retention_days)
+            except ValueError as e:
+                logger.warning(f"Ungültiger Wert für done_retention_days, behalte {done_retention_days}: {e}")
 
         # Sektion [blacklist] einlesen
         if 'blacklist' in config:
@@ -413,6 +422,16 @@ def load_configuration(log_changes=False):
     AUTO_THUMB_MIN_SEC = auto_thumb_min_sec
     AUTO_THUMB_MAX_SEC = auto_thumb_max_sec
     ALLOW_OVERWRITE = allow_overwrite
+
+    if 'DONE_RETENTION_DAYS' in os.environ:
+        try:
+            done_retention_days = int(os.environ['DONE_RETENTION_DAYS'])
+        except ValueError:
+            logger.warning(
+                f"Ungültiger Wert für DONE_RETENTION_DAYS ({os.environ['DONE_RETENTION_DAYS']!r}), "
+                f"behalte {done_retention_days}."
+            )
+    DONE_RETENTION_DAYS = max(0, done_retention_days)
 
 
 # Hardcoded-Defaults vor dem ersten Laden festhalten, damit use_config_file()
