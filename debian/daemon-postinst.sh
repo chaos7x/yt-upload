@@ -84,5 +84,14 @@ else
     echo "    Zeile in /etc/cron.d/yt-upload-retry einkommentieren (dort deaktiviert ausgeliefert)"
 fi
 echo ""
+echo "Optional: Dateien in DONE_DIR nach done_retention_days (upload.conf,"
+echo "Standard 7 Tage) taeglich automatisch loeschen:"
+echo ""
+if [ -d /run/systemd/system ]; then
+    echo "    systemctl enable --now yt-upload-purge.timer"
+else
+    echo "    Zeile in /etc/cron.d/yt-upload-purge einkommentieren (dort deaktiviert ausgeliefert)"
+fi
+echo ""
 
 exit 0

@@ -86,7 +86,10 @@ done
                    "    service yt-upload start\n"
                    "Optionaler taeglicher Retry-Requeue:\n"
                    "    echo '0 3 * * * yt-upload /usr/local/bin/yt-upload --requeue-retries "
-                   ">/dev/null 2>&1' > /usr/local/etc/cron.d/yt-upload-retry",
+                   ">/dev/null 2>&1' > /usr/local/etc/cron.d/yt-upload-retry\n"
+                   "Optionales taegliches Loeschen alter Dateien in DONE_DIR (done_retention_days, Standard 7):\n"
+                   "    echo '30 4 * * * yt-upload /usr/local/bin/yt-upload --purge-done "
+                   ">/dev/null 2>&1' > /usr/local/etc/cron.d/yt-upload-purge",
     },
 ]
 # ----------------------------------------------------------------------------

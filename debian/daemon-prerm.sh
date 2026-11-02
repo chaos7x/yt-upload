@@ -10,8 +10,10 @@ if [ "$1" = "remove" ]; then
         systemctl disable yt-upload.service || true
         systemctl stop yt-upload-retry.timer || true
         systemctl disable yt-upload-retry.timer || true
+        systemctl stop yt-upload-purge.timer || true
+        systemctl disable yt-upload-purge.timer || true
     elif [ -x /etc/init.d/yt-upload ]; then
-        # /etc/cron.d/yt-upload-retry ist ein --config-files-Conffile - dpkg
+        # /etc/cron.d/yt-upload-{retry,purge} sind --config-files-Conffiles - dpkg
         # kuemmert sich beim Entfernen/Purge selbst darum, hier kein manuelles rm noetig.
         /etc/init.d/yt-upload stop || true
         command -v update-rc.d >/dev/null 2>&1 && update-rc.d yt-upload remove >/dev/null || true
