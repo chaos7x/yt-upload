@@ -217,9 +217,49 @@ Persistent=true
 WantedBy=timers.target
 ```
 
-Dasselbe gilt für das Aufräumen von `DONE_DIR` (`--purge-done`, siehe Bare-Metal-Abschnitt): eine zweite Host-Crontab-Zeile bzw. ein zweites Service/Timer-Paar mit `docker exec yt-upload yt-upload --purge-done`.
-
 (`yt-upload` im `docker exec`-Aufruf ist hier der `container_name` aus der Compose-Datei oben, nicht der Befehl - bei abweichendem Namen entsprechend anpassen.)
+
+### Optional: Alte Dateien in DONE_DIR löschen (Docker)
+
+Auch das Aufräumen von `DONE_DIR` (`--purge-done`, Details im Bare-Metal-Abschnitt) läuft im Container **nicht** von selbst: der Container startet nur `yt-upload -D`, und der Dämon löscht bewusst nichts. Ohne einen der folgenden Aufrufe bleibt `DONE_DIR` also unverändert. Wie beim Retry startet der Docker-Host einen zweiten, kurzlebigen Prozess im laufenden Container (kein Instanz-Lock, läuft problemlos neben `-D`). Am Container bzw. an der `docker-compose.yaml` muss dafür nichts geändert werden; die Frist (`DONE_RETENTION_DAYS`, Standard `7`, `0` = aus) gilt ohne weitere Angabe:
+
+```bash
+# Host-Crontab (crontab -e auf dem Docker-Host)
+30 4 * * * docker exec yt-upload yt-upload --purge-done
+```
+
+Oder als systemd-Timer auf dem Host:
+
+```ini
+# /etc/systemd/system/yt-upload-purge-docker.service
+[Unit]
+Description=yt-upload (Docker) - Loeschen alter Dateien aus DONE_DIR
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec yt-upload yt-upload --purge-done
+```
+
+```ini
+# /etc/systemd/system/yt-upload-purge-docker.timer
+[Unit]
+Description=Periodisches Loeschen alter Dateien aus DONE_DIR (yt-upload, Docker)
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl daemon-reload
+systemctl enable --now yt-upload-purge-docker.timer
+```
+
+Eine abweichende Frist entweder dauerhaft per `DONE_RETENTION_DAYS` in `environment`/`.env` des Containers oder nur für diesen Aufruf: `docker exec -e DONE_RETENTION_DAYS=14 yt-upload yt-upload --purge-done`. Einmalig von Hand geht dasselbe jederzeit ohne Timer.
 
 #### Alternative: Scheduler-Sidecar in der docker-compose.yaml (ofelia)
 
@@ -233,6 +273,8 @@ services:
       ofelia.enabled: "true"
       ofelia.job-exec.retry.schedule: "@daily"
       ofelia.job-exec.retry.command: "yt-upload --requeue-retries"
+      ofelia.job-exec.purge.schedule: "@daily"
+      ofelia.job-exec.purge.command: "yt-upload --purge-done"
 
   ofelia:
     image: mcuadros/ofelia:latest
