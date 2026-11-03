@@ -37,3 +37,5 @@ src/*.egg-info/
 # Repo-spezifisch: YouTube-Credentials
 client_secrets.json
 youtube-upload-credentials.json
+.yt-dlp_cookies.txt
+
