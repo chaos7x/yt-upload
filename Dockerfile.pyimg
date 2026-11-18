@@ -19,7 +19,7 @@ FROM mwader/static-ffmpeg:9.0.2-1@sha256:f5d100184884eb3e82b0eb14bb5ebf98da99826
 # nicht im Laufzeit-Image landen. --target sammelt daher alle Pakete (eigenes
 # Package + requests + deren jeweilige Abhängigkeiten) flach in
 # einem Ordner, aus dem unten gezielt nach /rootfs übernommen wird.
-FROM python:3-slim@sha256:044d5bd747976e21f8bc4d746c3479b19a84bb8ae6261b802acdd26b29036c93 AS builder
+FROM python:3-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS builder
 
 WORKDIR /build
 COPY pyproject.toml /build/pyproject.toml
@@ -56,7 +56,7 @@ COPY upload.conf.example /rootfs/etc/yt-upload/upload.conf
 # ==========================================
 # STUFE 2: FINAL STAGE (Schlankes Laufzeit-Image, kein pip/setuptools)
 # ==========================================
-FROM python:3-slim@sha256:044d5bd747976e21f8bc4d746c3479b19a84bb8ae6261b802acdd26b29036c93
+FROM python:3-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 # ------------------------------------------
 # LAYER 1: FFmpeg Binaries aus STUFE 0 kopieren
