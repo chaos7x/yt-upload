@@ -13,7 +13,7 @@ FROM mwader/static-ffmpeg:9.0.2-1@sha256:f5d100184884eb3e82b0eb14bb5ebf98da99826
 # STUFE 1: Builder - installiert das yt_upload-Package isoliert
 # ==========================================
 # Eigene Stage, damit pip/setuptools NICHT im finalen Laufzeit-Image landen.
-FROM alpine:3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS builder
+FROM alpine:3@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS builder
 
 RUN apk add --no-cache \
     python3 \
@@ -47,7 +47,7 @@ COPY upload.conf.example /rootfs/etc/yt-upload/upload.conf
 # ==========================================
 # STUFE 2: FINAL STAGE (schlankes Laufzeit-Image, kein pip/setuptools)
 # ==========================================
-FROM alpine:3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+FROM alpine:3@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
 # ------------------------------------------
 # LAYER 1: FFmpeg Binaries aus STUFE 0 kopieren
