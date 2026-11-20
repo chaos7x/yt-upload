@@ -18,7 +18,7 @@ FROM mwader/static-ffmpeg:9.0.2-1@sha256:f5d100184884eb3e82b0eb14bb5ebf98da99826
 # haben - --target liefert reine Python-Dateien ohne C-Extensions, die sind
 # über Python-Versionen hinweg portabel (anders als bei --prefix, das über
 # versionsspezifische site-packages/dist-packages-Pfade koppelt).
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS builder
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -56,7 +56,7 @@ COPY upload.conf.example /rootfs/etc/yt-upload/upload.conf
 # ==========================================
 # STUFE 2: FINAL STAGE (schlankes Laufzeit-Image, kein pip/setuptools)
 # ==========================================
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 # ------------------------------------------
 # LAYER 1: FFmpeg Binaries aus STUFE 0 kopieren
