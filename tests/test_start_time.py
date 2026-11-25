@@ -75,7 +75,7 @@ def _run(pipeline, monkeypatch, tmp_path, meta, segments=1, args=None):
     monkeypatch.setattr(pipeline, "is_file_ready_and_valid", lambda *_a, **_k: True)
     monkeypatch.setattr(pipeline, "extract_metadata_and_thumb", lambda *_a, **_k: dict(meta))
     seg_paths = [str(video)] if segments == 1 else [str(tmp_path / f"seg{i}.mkv") for i in range(segments)]
-    monkeypatch.setattr(pipeline, "split_video_if_needed", lambda work_path, output_dir=None: seg_paths)
+    monkeypatch.setattr(pipeline, "split_video_if_needed", lambda work_path, output_dir=None, segment_time_sec=None: seg_paths)
     monkeypatch.setattr(pipeline, "upload_single_video", lambda **k: calls.append(k) or f"id{len(calls)}")
     pipeline.process_single_file(str(video), args=args, manage_files=False)
     return calls

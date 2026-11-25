@@ -107,11 +107,14 @@ def parse_start_time(value):
     return parsed.astimezone(UTC).replace(microsecond=0)
 
 
-def segment_start_time(start, segment_index):
-    """Startzeit von Segment segment_index (0-basiert) bei Splitting nach config.SEGMENT_TIME_SEC."""
+def segment_start_time(start, segment_index, segment_time_sec=None):
+    """Startzeit von Segment segment_index (0-basiert) bei Splitting nach segment_time_sec
+    (Standard config.SEGMENT_TIME_SEC)."""
     if start is None:
         return None
-    return start + timedelta(seconds=segment_index * config.SEGMENT_TIME_SEC)
+    if segment_time_sec is None:
+        segment_time_sec = config.SEGMENT_TIME_SEC
+    return start + timedelta(seconds=segment_index * segment_time_sec)
 
 
 def format_recording_datetime(start):

@@ -228,10 +228,12 @@ def extract_metadata_and_thumb(file_path):
     return metadata
 
 
-def split_video_if_needed(work_path, output_dir=None):
+def split_video_if_needed(work_path, output_dir=None, segment_time_sec=None):
     """
-    Prüft, ob das Video die Maximallänge (10h) überschreitet.
-    Wenn ja, wird es verlustfrei mittels Stream-Copying (-c copy) in mehrere Teile gesplittet.
+    Prüft, ob das Video die Split-Länge (segment_time_sec, Standard
+    config.SEGMENT_TIME_SEC aus split_hours, Standard 8h) überschreitet. Wenn ja, wird es
+    verlustfrei mittels Stream-Copying (-c copy) in mehrere Teile gesplittet.
+    0 schaltet das Splitting ab.
 
     output_dir=None (Standard) schreibt Segmente wie bisher nach config.WORK_DIR
     (Dämon-/Auto-Batch-Modus). Der manuelle CLI-Modus übergibt stattdessen ein
@@ -240,6 +242,8 @@ def split_video_if_needed(work_path, output_dir=None):
     """
     if output_dir is None:
         output_dir = config.WORK_DIR
+    if segment_time_sec is None:
+        segment_time_sec = config.SEGMENT_TIME_SEC
 
     try:
         cmd_probe = [
@@ -257,10 +261,15 @@ def split_video_if_needed(work_path, output_dir=None):
 
     logger.info(f"Videolänge: {int(duration_sec)} Sekunden ({duration_sec / 3600:.2f} Stunden)")
 
-    if duration_sec <= config.SEGMENT_TIME_SEC:
+    if segment_time_sec <= 0:
+        if duration_sec > config.YOUTUBE_MAX_DURATION_SEC:
+            logger.warning("Splitting ist abgeschaltet (split_hours = 0), YouTube lehnt Videos über 12 Stunden ab.")
         return [work_path]
 
-    logger.info("Video überschreitet 10 Stunden. Starte FFmpeg-Splitting...")
+    if duration_sec <= segment_time_sec:
+        return [work_path]
+
+    logger.info(f"Video überschreitet {segment_time_sec / 3600:g} Stunden. Starte FFmpeg-Splitting...")
     filename = os.path.basename(work_path)
     base_name, ext = os.path.splitext(filename)
     segment_pattern = os.path.join(output_dir, f"{base_name}_part%02d{ext}")
@@ -278,7 +287,7 @@ def split_video_if_needed(work_path, output_dir=None):
     cmd_split = [
         "ffmpeg", "-y", "-i", work_path, "-c", "copy", "-map", "0",
         "-avoid_negative_ts", "make_zero", "-f", "segment",
-        "-segment_time", str(config.SEGMENT_TIME_SEC), "-reset_timestamps", "1",
+        "-segment_time", str(segment_time_sec), "-reset_timestamps", "1",
         segment_pattern
     ]
 

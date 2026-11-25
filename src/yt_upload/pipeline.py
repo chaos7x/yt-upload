@@ -11,6 +11,7 @@ from yt_upload import config
 from yt_upload.fileutils import (
     cleanup_work_files,
     clear_segment_progress,
+    load_progress_segment_time,
     load_segment_progress,
     resolve_target_path,
     save_segment_progress,
@@ -77,7 +78,7 @@ def process_single_file(file_path, args=None, manage_files=True):
     Nutzer sie angegeben hat - ein anwesender Mensch sieht den Erfolg/Fehler
     ohnehin direkt an Exit-Code/Log, ein automatisches Verschieben in eines
     dieser Verzeichnisse wäre nur überraschendes Verhalten. Ein eventuelles
-    Splitting bei Überlänge (>10h) schreibt seine Segmente in diesem Fall in
+    Splitting bei Überlänge (> split_hours, Standard 8h) schreibt seine Segmente in diesem Fall in
     ein per tempfile.mkdtemp() erzeugtes Temp-Verzeichnis statt nach WORK_DIR.
     """
     filename = os.path.basename(file_path)
@@ -175,8 +176,19 @@ def process_single_file(file_path, args=None, manage_files=True):
     chunksize = _arg(args, "chunksize", config.DEFAULT_CHUNKSIZE)
     open_link = _arg(args, "open_link", False)
 
+    # Ein Retry nach Teil-Upload splittet mit der damals verwendeten Länge,
+    # sonst passten die Segmentnamen im Fortschritt nicht mehr zum Inhalt.
+    segment_time = load_progress_segment_time(work_path)
+    if segment_time is None:
+        segment_time = config.SEGMENT_TIME_SEC
+    elif segment_time != config.SEGMENT_TIME_SEC:
+        logger.info(
+            f"Fortsetzung eines Teil-Uploads: splitte wie beim ersten Versuch nach "
+            f"{segment_time / 3600:g} h statt nach aktuell {config.SEGMENT_TIME_SEC / 3600:g} h (split_hours)."
+        )
+
     # Splitting-Prüfung ausführen
-    segments = split_video_if_needed(work_path, output_dir=split_output_dir)
+    segments = split_video_if_needed(work_path, output_dir=split_output_dir, segment_time_sec=segment_time)
     was_split = segments != [work_path]
 
     if split_temp_dir and not was_split:
@@ -202,10 +214,10 @@ def process_single_file(file_path, args=None, manage_files=True):
         if len(segments) > 1:
             part_title = f"{title_base} (Teil {idx + 1}/{len(segments)})"
 
-        # Bei Splitting beginnt jedes Segment um idx * SEGMENT_TIME_SEC später
+        # Bei Splitting beginnt jedes Segment um idx * segment_time später
         part_desc = desc_base
         part_rec_date = rec_date
-        part_start = segment_start_time(start_time, idx)
+        part_start = segment_start_time(start_time, idx, segment_time)
         if part_start:
             if not rec_date_arg:
                 part_rec_date = format_recording_datetime(part_start)
@@ -238,7 +250,7 @@ def process_single_file(file_path, args=None, manage_files=True):
             )
             # Fortschritt sofort persistieren, damit bei einem späteren Fehler nichts verloren geht
             progress[seg_key] = video_id
-            save_segment_progress(work_path, progress)
+            save_segment_progress(work_path, progress, segment_time)
         except Exception as e:  # noqa: BLE001 - Top-Level-Boundary für den gesamten Segment-Upload; Fehler aus Netzwerk, Dateisystem und API-Logik sollen hier gleichermaßen zu einem sauberen Retry/Corrupt-Handling führen statt den Daemon abstürzen zu lassen
             logger.error(f"Upload-Fehler bei Segment {seg}: {e}")
 

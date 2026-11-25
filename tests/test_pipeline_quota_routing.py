@@ -22,7 +22,7 @@ DEFAULT_META = {
 def _patch_common(monkeypatch, pipeline, upload_side_effect):
     monkeypatch.setattr(pipeline, "is_file_ready_and_valid", lambda *_a, **_k: True)
     monkeypatch.setattr(pipeline, "extract_metadata_and_thumb", lambda *_a, **_k: dict(DEFAULT_META))
-    monkeypatch.setattr(pipeline, "split_video_if_needed", lambda work_path, output_dir=None: [work_path])
+    monkeypatch.setattr(pipeline, "split_video_if_needed", lambda work_path, output_dir=None, segment_time_sec=None: [work_path])
     monkeypatch.setattr(pipeline, "upload_single_video", upload_side_effect)
 
 

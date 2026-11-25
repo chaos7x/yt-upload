@@ -93,8 +93,14 @@ def _progress_file_path(work_path):
     return os.path.join(directory, f".{filename}.progress.json")
 
 
-def load_segment_progress(work_path):
-    """Lädt {segment_dateiname: video_id} bereits erfolgreich hochgeladener Segmente, falls vorhanden."""
+# Reservierter Schlüssel in der Progress-Datei: Split-Länge, mit der die
+# protokollierten Segmente erzeugt wurden. Ein Retry splittet damit identisch,
+# auch wenn split_hours inzwischen geändert wurde - sonst hätte z.B. _part01
+# einen anderen Inhalt als das bereits hochgeladene _part01.
+_SEGMENT_TIME_KEY = "__segment_time_sec__"
+
+
+def _read_progress_file(work_path):
     progress_path = _progress_file_path(work_path)
     if not os.path.isfile(progress_path):
         return {}
@@ -107,12 +113,33 @@ def load_segment_progress(work_path):
         return {}
 
 
-def save_segment_progress(work_path, progress):
+def load_segment_progress(work_path):
+    """Lädt {segment_dateiname: video_id} bereits erfolgreich hochgeladener Segmente, falls vorhanden."""
+    return {k: v for k, v in _read_progress_file(work_path).items() if k != _SEGMENT_TIME_KEY}
+
+
+def load_progress_segment_time(work_path):
+    """
+    Split-Länge (Sekunden), mit der ein vorheriger, teilweise hochgeladener Lauf
+    gesplittet hat, oder None ohne Fortschritt. Progress-Dateien von vor 1.17.0
+    enthalten den Wert nicht; sie stammen immer vom festen 10h-Splitting.
+    """
+    data = _read_progress_file(work_path)
+    if not any(k != _SEGMENT_TIME_KEY for k in data):
+        return None
+    value = data.get(_SEGMENT_TIME_KEY, config.LEGACY_SEGMENT_TIME_SEC)
+    return value if isinstance(value, int) and value > 0 else config.LEGACY_SEGMENT_TIME_SEC
+
+
+def save_segment_progress(work_path, progress, segment_time_sec=None):
     """Persistiert den aktuellen Fortschritt sofort nach jedem erfolgreichen Segment-Upload."""
     progress_path = _progress_file_path(work_path)
+    data = dict(progress)
+    if segment_time_sec:
+        data[_SEGMENT_TIME_KEY] = int(segment_time_sec)
     try:
         with open(progress_path, "w", encoding="utf-8") as f:
-            json.dump(progress, f)
+            json.dump(data, f)
     except OSError as e:
         logger.warning(f"Konnte Progress-Datei {progress_path} nicht schreiben: {e}")
 
