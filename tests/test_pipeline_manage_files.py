@@ -35,7 +35,7 @@ class TestManageFilesFalseSuccess:
         video.write_bytes(b"fake video content")
 
         _patch_common(monkeypatch, pipeline)
-        monkeypatch.setattr(pipeline, "split_video_if_needed", lambda work_path, output_dir=None: [work_path])
+        monkeypatch.setattr(pipeline, "split_video_if_needed", lambda work_path, output_dir=None, segment_time_sec=None: [work_path])
 
         pipeline.process_single_file(str(video), args=None, manage_files=False)
 
@@ -54,7 +54,7 @@ class TestManageFilesFalseSuccess:
 
         captured = {}
 
-        def fake_split(work_path, output_dir=None):
+        def fake_split(work_path, output_dir=None, segment_time_sec=None):
             captured["output_dir"] = output_dir
             assert output_dir is not None
             assert output_dir != str(work_dir)
@@ -82,7 +82,7 @@ class TestManageFilesFalseSuccess:
 
         captured = {}
 
-        def fake_split(work_path, output_dir=None):
+        def fake_split(work_path, output_dir=None, segment_time_sec=None):
             captured["output_dir"] = output_dir
             return [work_path]  # kein Splitting nötig
 
@@ -114,7 +114,7 @@ class TestManageFilesFalseFailure:
             raise RuntimeError("simulierter Upload-Fehler")
 
         _patch_common(monkeypatch, pipeline, upload_side_effect=failing_upload)
-        monkeypatch.setattr(pipeline, "split_video_if_needed", lambda work_path, output_dir=None: [work_path])
+        monkeypatch.setattr(pipeline, "split_video_if_needed", lambda work_path, output_dir=None, segment_time_sec=None: [work_path])
 
         pipeline.process_single_file(str(video), args=None, manage_files=False)
 

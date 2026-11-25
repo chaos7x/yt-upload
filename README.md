@@ -2,7 +2,7 @@
 
 `yt-upload` ist eine Python- und Docker-basierte Automatisierungslösung zur ereignisbasierten Überwachung von Video-Verzeichnissen und zum automatischen Upload auf YouTube via native REST API v3, FFmpeg und inotify.
 
-Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten sowie Cover-Thumbnails, zerlegt Videos bei Bedarf verlustfrei in Segmente (z. B. bei Dateien > 10 Stunden) und ordnet sie dynamisch Playlists zu.
+Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten sowie Cover-Thumbnails, zerlegt Videos bei Bedarf verlustfrei in Segmente (standardmäßig bei Dateien > 8 Stunden, einstellbar per `split_hours`) und ordnet sie dynamisch Playlists zu.
 
 ---
 
@@ -15,7 +15,7 @@ Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten 
   2. **Auto-Batch (`-a` / `--auto`):** Einmaliges Abarbeiten eines Verzeichnisses mit anschließendem Beenden.
   3. **Manuell (CLI):** Upload einzelner Videodateien mit voller Parameterkontrolle.
 * **Metadaten- & Thumbnail-Extraktion:** Liest Titel, Beschreibung, PURL, Genre, Aufnahmedatum und Artist via `ffprobe` aus. Extrahiert automatisch Thumbnails aus MKV-Attachments (JPEG, PNG und WebP, z. B. von `yt-dlp --embed-thumbnail`), MP4-Covern oder generiert ein Frame-Thumbnail.
-* **Verlustfreies FFmpeg-Splitting:** Zertrennt Videos mit einer Laufzeit von über 10 Stunden (36.000 Sekunden) automatisch und ohne Qualitätsverlust (`-c copy`) in durchnummerierte Segmente.
+* **Verlustfreies FFmpeg-Splitting:** Zertrennt Videos, die länger als `split_hours` sind (Standard 8 Stunden, also drei Teile pro 24 h), automatisch und ohne Qualitätsverlust (`-c copy`) in durchnummerierte Segmente mit dem Titelzusatz `(Teil n/m)`. Kürzere Teile transkribiert YouTube zuverlässiger als ~10-h-Videos. `0` schaltet das Splitting ab (YouTube nimmt höchstens 12 Stunden pro Video an).
 * **Dynamische Playlist-Verwaltung:** Erstellt und verknüpft Ziel-Playlists automatisch (z. B. auf Basis des `ARTIST`-Tags via `ENABLE_DYNAMIC_PLAYLISTS`).
 * **Erzwungen privat pro Artist:** Videos bestimmter Artists (`ARTIST`-Tag, z. B. Twitch-Kanal von tw-recorder) werden über die Sektion `[force_private]` bzw. `FORCE_PRIVATE_ARTISTS` immer als `private` hochgeladen, etwa um sie vor der Freigabe in YouTube Studio ab 18 einzustufen (per API nicht möglich).
 * **Robustes Retry & Health-Check:** Prüft Videodateien vor dem Upload auf unvollständige Schreibvorgänge / fehlende `moov`-Atome. Bereits erfolgreich hochgeladene Segmente werden bei einem Fehler im nächsten Segment nicht erneut hochgeladen (Fortschritt wird pro Datei persistiert) - fehlgeschlagene Jobs mit Teilfortschritt oder einem reinen API-Kontingent-Limit (`quotaExceeded`) landen in `RETRY_DIR`, komplett fehlerhafte in `CORRUPT_DIR`. Ein optionaler `yt-upload-retry.timer` (siehe unten) verschiebt `RETRY_DIR`-Inhalte periodisch automatisch zurück nach `IN_DIR`.
@@ -581,6 +581,10 @@ Mit `-f`/`--config PATH` lässt sich stattdessen eine eigene Config-Datei angebe
 # Bei Namenskonflikten in DONE/CORRUPT Dateien überschreiben statt umzubenennen (true/false)
 #allow_overwrite = true
 
+# Videos länger als so viele Stunden verlustfrei in Teile dieser Länge
+# splitten (Kommazahl erlaubt; 0 = nie splitten; YouTube-Limit 12 h)
+#split_hours = 8
+
 # Dateien in done_dir nach so vielen Tagen löschen (ab Ankunft in done_dir;
 # 0 = nie). Wirkt nur mit `yt-upload --purge-done` (yt-upload-purge.timer)
 #done_retention_days = 7
@@ -681,6 +685,10 @@ Mit `-f`/`--config PATH` lässt sich stattdessen eine eigene Config-Datei angebe
 * `DONE_RETENTION_DAYS`
   * **Standard:** `7`
   * **Beschreibung:** Mindestalter in Tagen (ab Ankunft in `DONE_DIR`), ab dem `--purge-done` eine Datei löscht. `0` schaltet das Löschen ab. Wirkt nur, wenn `--purge-done` periodisch aufgerufen wird.
+
+* `SPLIT_HOURS`
+  * **Standard:** `8`
+  * **Beschreibung:** Videos, die länger sind, werden vor dem Upload verlustfrei in Teile dieser Länge gesplittet (Stunden, Kommazahl erlaubt; `0` = nie splitten). Entspricht `split_hours` in `[settings]`. Ein ungültiger Wert wird mit Warnung ignoriert. Ein in `RETRY_DIR` liegendes, bereits teilweise hochgeladenes Video wird immer mit der Länge des ersten Versuchs weiter gesplittet, damit kein Teil doppelt oder gar nicht hochgeladen wird.
 
 * `TZ`
   * **Standard:** `UTC`

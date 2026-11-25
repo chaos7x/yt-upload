@@ -40,7 +40,7 @@ def _run(pipeline, monkeypatch, tmp_path, meta, args=None):
     video.write_bytes(b"fake video content")
     monkeypatch.setattr(pipeline, "is_file_ready_and_valid", lambda *_a, **_k: True)
     monkeypatch.setattr(pipeline, "extract_metadata_and_thumb", lambda *_a, **_k: dict(meta))
-    monkeypatch.setattr(pipeline, "split_video_if_needed", lambda work_path, output_dir=None: [str(video)])
+    monkeypatch.setattr(pipeline, "split_video_if_needed", lambda work_path, output_dir=None, segment_time_sec=None: [str(video)])
     monkeypatch.setattr(pipeline, "upload_single_video", lambda **k: calls.append(k) or "id1")
     pipeline.process_single_file(str(video), args=args, manage_files=False)
     return calls

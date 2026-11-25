@@ -13,6 +13,7 @@ import copy
 import glob
 import hashlib
 import logging
+import math
 import os
 import tempfile
 
@@ -30,7 +31,13 @@ CONF_D_DIR = os.environ.get('CONF_D_DIR', os.path.join(os.path.dirname(CONF_PATH
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # YouTube Limitierungen & Netzwerk-Chunk-Spezifikationen
-SEGMENT_TIME_SEC = 36000     # Maximum 10 Stunden pro Video vor automatischem Splitting
+# Videos länger als SEGMENT_TIME_SEC werden vor dem Upload verlustfrei in Teile
+# dieser Länge gesplittet (0 = nie splitten). Einstellbar per split_hours in
+# [settings] bzw. SPLIT_HOURS, siehe _parse_split_hours().
+LEGACY_SEGMENT_TIME_SEC = 36000  # fester Wert bis 1.16.x, gilt für alte Progress-Dateien
+SEGMENT_TIME_SEC = 8 * 3600  # Standard 8h: kürzere Teile transkribiert YouTube zuverlässiger, 3 Teile pro 24h
+# YouTube lehnt Videos über 12 Stunden ab (verifizierte Konten)
+YOUTUBE_MAX_DURATION_SEC = 12 * 3600
 CHUNK_UNIT_BYTES = 262144    # 256 KiB Basis-Einheit für Resumable Chunk Uploads (Zwingende YouTube API Vorgabe)
 DEFAULT_CHUNKSIZE = 268435456  # 256 MiB Standard-Chunkgröße für den Upload (--chunksize)
 
@@ -203,6 +210,22 @@ DESCRIPTION_BLACKLIST = [w.strip() for w in _env_blacklist.split(',') if w.strip
 FORCE_PRIVATE_ARTISTS = []
 
 
+def _parse_split_hours(value, current_sec, source):
+    """
+    Wandelt split_hours (Stunden, Kommazahl erlaubt, 0 = aus) in Sekunden um.
+    Bei ungültigem oder negativem Wert bleibt current_sec mit Warnung erhalten.
+    """
+    try:
+        hours = float(str(value).strip().replace(',', '.'))
+    except ValueError:
+        logger.warning(f"Ungültiger Wert für {source} ({value!r}), behalte {current_sec / 3600:g} h.")
+        return current_sec
+    if not math.isfinite(hours) or hours < 0:
+        logger.warning(f"Ungültiger Wert für {source} ({value!r}), behalte {current_sec / 3600:g} h.")
+        return current_sec
+    return int(round(hours * 3600))
+
+
 # ==============================================================================
 # KONFIGURATIONSLADER & DYNAMISCHER HOT-RELOAD
 # ==============================================================================
@@ -220,7 +243,7 @@ def load_configuration(log_changes=False):
     global DEFAULT_DESCRIPTION, DEFAULT_TAGS, DEFAULT_CATEGORY, VIDEO_PRIVACY
     global VIDEO_LANGUAGE, ALLOW_EMBEDDING, PLAYLIST_NAME, AUTO_GENERATE_THUMBNAIL
     global AUTO_THUMB_MIN_SEC, AUTO_THUMB_MAX_SEC, ALLOW_OVERWRITE, DYNAMIC_PLAYLISTS
-    global ADD_START_TIME_TO_DESCRIPTION, DONE_RETENTION_DAYS
+    global ADD_START_TIME_TO_DESCRIPTION, DONE_RETENTION_DAYS, SEGMENT_TIME_SEC
     global CURRENT_CONFIG_HASH
     global ENABLE_DESCRIPTION_CENSOR, DESCRIPTION_BLACKLIST, FORCE_PRIVATE_ARTISTS
     global LOG_FILE_EXPLICIT
@@ -249,6 +272,7 @@ def load_configuration(log_changes=False):
     dynamic_playlists = DYNAMIC_PLAYLISTS
     add_start_time_to_description = ADD_START_TIME_TO_DESCRIPTION
     done_retention_days = DONE_RETENTION_DAYS
+    segment_time_sec = SEGMENT_TIME_SEC
 
     combined_blacklist = set(DESCRIPTION_BLACKLIST) if DESCRIPTION_BLACKLIST else set()
     # Anders als die Blacklist bei jedem Laden neu aufgebaut, damit ein aus
@@ -351,6 +375,10 @@ def load_configuration(log_changes=False):
                 done_retention_days = config.getint('settings', 'done_retention_days', fallback=done_retention_days)
             except ValueError as e:
                 logger.warning(f"Ungültiger Wert für done_retention_days, behalte {done_retention_days}: {e}")
+            if config.has_option('settings', 'split_hours'):
+                segment_time_sec = _parse_split_hours(
+                    config.get('settings', 'split_hours'), segment_time_sec, 'split_hours'
+                )
 
         # Sektion [blacklist] einlesen
         if 'blacklist' in config:
@@ -432,6 +460,15 @@ def load_configuration(log_changes=False):
                 f"behalte {done_retention_days}."
             )
     DONE_RETENTION_DAYS = max(0, done_retention_days)
+
+    if 'SPLIT_HOURS' in os.environ:
+        segment_time_sec = _parse_split_hours(os.environ['SPLIT_HOURS'], segment_time_sec, 'SPLIT_HOURS')
+    if segment_time_sec != SEGMENT_TIME_SEC and segment_time_sec > YOUTUBE_MAX_DURATION_SEC:
+        logger.warning(
+            f"split_hours = {segment_time_sec / 3600:g} liegt über dem YouTube-Limit von 12 Stunden, "
+            "längere Teile lehnt YouTube ab."
+        )
+    SEGMENT_TIME_SEC = segment_time_sec
 
 
 # Hardcoded-Defaults vor dem ersten Laden festhalten, damit use_config_file()
