@@ -2,7 +2,7 @@
 
 `yt-upload` ist eine Python- und Docker-basierte Automatisierungslösung zur ereignisbasierten Überwachung von Video-Verzeichnissen und zum automatischen Upload auf YouTube via native REST API v3, FFmpeg und inotify.
 
-Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten sowie Cover-Thumbnails, zerlegt Videos bei Bedarf verlustfrei in Segmente (standardmäßig bei Dateien > 8 Stunden, einstellbar per `split_hours`) und ordnet sie dynamisch Playlists zu.
+Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten sowie Cover-Thumbnails, zerlegt Videos bei Bedarf verlustfrei in Segmente (standardmäßig bei Dateien > 3,5 Stunden, einstellbar per `split_hours`) und ordnet sie dynamisch Playlists zu.
 
 ---
 
@@ -15,7 +15,7 @@ Das Tool verarbeitet eingehende Videodateien, extrahiert eingebettete Metadaten 
   2. **Auto-Batch (`-a` / `--auto`):** Einmaliges Abarbeiten eines Verzeichnisses mit anschließendem Beenden.
   3. **Manuell (CLI):** Upload einzelner Videodateien mit voller Parameterkontrolle.
 * **Metadaten- & Thumbnail-Extraktion:** Liest Titel, Beschreibung, PURL, Genre, Aufnahmedatum und Artist via `ffprobe` aus. Extrahiert automatisch Thumbnails aus MKV-Attachments (JPEG, PNG und WebP, z. B. von `yt-dlp --embed-thumbnail`), MP4-Covern oder generiert ein Frame-Thumbnail.
-* **Verlustfreies FFmpeg-Splitting:** Zertrennt Videos, die länger als `split_hours` sind (Standard 8 Stunden, also drei Teile pro 24 h), automatisch und ohne Qualitätsverlust (`-c copy`) in durchnummerierte Segmente mit dem Titelzusatz `(Teil n/m)`. Kürzere Teile transkribiert YouTube zuverlässiger als ~10-h-Videos. `0` schaltet das Splitting ab (YouTube nimmt höchstens 12 Stunden pro Video an).
+* **Verlustfreies FFmpeg-Splitting:** Zertrennt Videos, die länger als `split_hours` sind (Standard 3,5 Stunden), automatisch und ohne Qualitätsverlust (`-c copy`) in durchnummerierte Segmente mit dem Titelzusatz `(Teil n/m)`. YouTubes automatische Transkription ist bei längeren Videos unzuverlässig; 3,5 h wurde durch Tests ermittelt (3 h 20 min hatten noch ein Transkript). `0` schaltet das Splitting ab (YouTube nimmt höchstens 12 Stunden pro Video an).
 * **Dynamische Playlist-Verwaltung:** Erstellt und verknüpft Ziel-Playlists automatisch (z. B. auf Basis des `ARTIST`-Tags via `ENABLE_DYNAMIC_PLAYLISTS`).
 * **Erzwungen privat pro Artist:** Videos bestimmter Artists (`ARTIST`-Tag, z. B. Twitch-Kanal von tw-recorder) werden über die Sektion `[force_private]` bzw. `FORCE_PRIVATE_ARTISTS` immer als `private` hochgeladen, etwa um sie vor der Freigabe in YouTube Studio ab 18 einzustufen (per API nicht möglich).
 * **Robustes Retry & Health-Check:** Prüft Videodateien vor dem Upload auf unvollständige Schreibvorgänge / fehlende `moov`-Atome. Bereits erfolgreich hochgeladene Segmente werden bei einem Fehler im nächsten Segment nicht erneut hochgeladen (Fortschritt wird pro Datei persistiert) - fehlgeschlagene Jobs mit Teilfortschritt oder einem reinen API-Kontingent-Limit (`quotaExceeded`) landen in `RETRY_DIR`, komplett fehlerhafte in `CORRUPT_DIR`. Ein optionaler `yt-upload-retry.timer` (siehe unten) verschiebt `RETRY_DIR`-Inhalte periodisch automatisch zurück nach `IN_DIR`.
@@ -583,7 +583,7 @@ Mit `-f`/`--config PATH` lässt sich stattdessen eine eigene Config-Datei angebe
 
 # Videos länger als so viele Stunden verlustfrei in Teile dieser Länge
 # splitten (Kommazahl erlaubt; 0 = nie splitten; YouTube-Limit 12 h)
-#split_hours = 8
+#split_hours = 3.5
 
 # Dateien in done_dir nach so vielen Tagen löschen (ab Ankunft in done_dir;
 # 0 = nie). Wirkt nur mit `yt-upload --purge-done` (yt-upload-purge.timer)
@@ -687,8 +687,8 @@ Mit `-f`/`--config PATH` lässt sich stattdessen eine eigene Config-Datei angebe
   * **Beschreibung:** Mindestalter in Tagen (ab Ankunft in `DONE_DIR`), ab dem `--purge-done` eine Datei löscht. `0` schaltet das Löschen ab. Wirkt nur, wenn `--purge-done` periodisch aufgerufen wird.
 
 * `SPLIT_HOURS`
-  * **Standard:** `8`
-  * **Beschreibung:** Videos, die länger sind, werden vor dem Upload verlustfrei in Teile dieser Länge gesplittet (Stunden, Kommazahl erlaubt; `0` = nie splitten). Entspricht `split_hours` in `[settings]`. Ein ungültiger Wert wird mit Warnung ignoriert. Ein in `RETRY_DIR` liegendes, bereits teilweise hochgeladenes Video wird immer mit der Länge des ersten Versuchs weiter gesplittet, damit kein Teil doppelt oder gar nicht hochgeladen wird.
+  * **Standard:** `3.5`
+  * **Beschreibung:** Videos, die länger sind, werden vor dem Upload verlustfrei in Teile dieser Länge gesplittet (Stunden, Kommazahl erlaubt, z. B. `3.5`; `0` = nie splitten). Der Standard 3,5 h ist durch Tests ermittelt: Bei längeren Videos ist YouTubes automatische Transkription unzuverlässig. Entspricht `split_hours` in `[settings]`. Ein ungültiger Wert wird mit Warnung ignoriert. Ein in `RETRY_DIR` liegendes, bereits teilweise hochgeladenes Video wird immer mit der Länge des ersten Versuchs weiter gesplittet, damit kein Teil doppelt oder gar nicht hochgeladen wird.
 
 * `TZ`
   * **Standard:** `UTC`

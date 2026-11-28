@@ -35,7 +35,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # dieser Länge gesplittet (0 = nie splitten). Einstellbar per split_hours in
 # [settings] bzw. SPLIT_HOURS, siehe _parse_split_hours().
 LEGACY_SEGMENT_TIME_SEC = 36000  # fester Wert bis 1.16.x, gilt für alte Progress-Dateien
-SEGMENT_TIME_SEC = 8 * 3600  # Standard 8h: kürzere Teile transkribiert YouTube zuverlässiger, 3 Teile pro 24h
+# Standard 3,5h: YouTubes automatische Transkription ist bei längeren Videos
+# unzuverlässig; der Wert wurde durch Tests ermittelt (3h20min noch mit Transkript).
+SEGMENT_TIME_SEC = int(3.5 * 3600)
 # YouTube lehnt Videos über 12 Stunden ab (verifizierte Konten)
 YOUTUBE_MAX_DURATION_SEC = 12 * 3600
 CHUNK_UNIT_BYTES = 262144    # 256 KiB Basis-Einheit für Resumable Chunk Uploads (Zwingende YouTube API Vorgabe)

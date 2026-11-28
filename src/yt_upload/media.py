@@ -231,7 +231,7 @@ def extract_metadata_and_thumb(file_path):
 def split_video_if_needed(work_path, output_dir=None, segment_time_sec=None):
     """
     Prüft, ob das Video die Split-Länge (segment_time_sec, Standard
-    config.SEGMENT_TIME_SEC aus split_hours, Standard 8h) überschreitet. Wenn ja, wird es
+    config.SEGMENT_TIME_SEC aus split_hours, Standard 3,5h) überschreitet. Wenn ja, wird es
     verlustfrei mittels Stream-Copying (-c copy) in mehrere Teile gesplittet.
     0 schaltet das Splitting ab.
 
