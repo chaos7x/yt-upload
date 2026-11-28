@@ -22,10 +22,10 @@ def _load(config, tmp_path, monkeypatch, content, env=None):
 
 
 class TestSplitHoursConfig:
-    def test_default_is_eight_hours(self, config, tmp_path, monkeypatch):
+    def test_default_is_three_and_a_half_hours(self, config, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "SEGMENT_TIME_SEC", config._DEFAULTS["SEGMENT_TIME_SEC"])
         _load(config, tmp_path, monkeypatch, "[settings]\n")
-        assert config.SEGMENT_TIME_SEC == 8 * 3600
+        assert config.SEGMENT_TIME_SEC == 12600
 
     def test_config_value(self, config, tmp_path, monkeypatch):
         _load(config, tmp_path, monkeypatch, "[settings]\nsplit_hours = 4\n")

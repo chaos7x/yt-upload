@@ -78,7 +78,7 @@ def process_single_file(file_path, args=None, manage_files=True):
     Nutzer sie angegeben hat - ein anwesender Mensch sieht den Erfolg/Fehler
     ohnehin direkt an Exit-Code/Log, ein automatisches Verschieben in eines
     dieser Verzeichnisse wäre nur überraschendes Verhalten. Ein eventuelles
-    Splitting bei Überlänge (> split_hours, Standard 8h) schreibt seine Segmente in diesem Fall in
+    Splitting bei Überlänge (> split_hours, Standard 3,5h) schreibt seine Segmente in diesem Fall in
     ein per tempfile.mkdtemp() erzeugtes Temp-Verzeichnis statt nach WORK_DIR.
     """
     filename = os.path.basename(file_path)

@@ -68,13 +68,14 @@
 #allow_overwrite = true
 
 # Videos, die länger als so viele Stunden sind, vor dem Upload verlustfrei in
-# Teile dieser Länge splitten (Kommazahl erlaubt, z.B. 7.5; 0 = nie splitten).
-# Kürzere Teile transkribiert YouTube zuverlässiger; YouTube nimmt maximal
-# 12 Stunden pro Video an. Geschnitten wird am nächsten Keyframe, ein Teil kann
+# Teile dieser Länge splitten (Kommazahl erlaubt, z.B. 3.5; 0 = nie splitten).
+# Standard 3.5: YouTubes automatische Transkription ist bei längeren Videos
+# unzuverlässig, der Wert wurde durch Tests ermittelt (3h20min hatten noch ein
+# Transkript). YouTube nimmt maximal 12 Stunden pro Video an. Geschnitten wird am nächsten Keyframe, ein Teil kann
 # also einige Sekunden länger sein. Ein bereits teilweise hochgeladenes Video
 # in retry_dir wird immer mit der damaligen Länge weiter gesplittet.
 # Umgebungsvariable: SPLIT_HOURS
-#split_hours = 8
+#split_hours = 3.5
 
 # Dateien in done_dir nach so vielen Tagen löschen (gezählt ab Ankunft in
 # done_dir, nicht ab Aufnahmedatum; 0 = nie löschen). Wirkt nur, wenn
